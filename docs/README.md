@@ -1,0 +1,220 @@
+# FlashViewer
+
+**GPU-accelerated satellite image viewer for large geospatial rasters**
+
+![CI Linux](https://github.com/san-aria/FlashViewer/actions/workflows/ci-linux.yml/badge.svg?branch=main)
+![CI macOS](https://github.com/san-aria/FlashViewer/actions/workflows/ci-macos.yml/badge.svg?branch=main)
+![CI Windows](https://github.com/san-aria/FlashViewer/actions/workflows/ci-windows.yml/badge.svg?branch=main)
+![CI Linux (conda)](https://github.com/san-aria/FlashViewer/actions/workflows/ci-linux-conda.yml/badge.svg?branch=main)
+![CI macOS (conda)](https://github.com/san-aria/FlashViewer/actions/workflows/ci-macos-conda.yml/badge.svg?branch=main)
+![Version](https://img.shields.io/badge/version-0.1.0-blue)
+
+## Overview
+
+FlashViewer is an open-source desktop application for navigating and analyzing large satellite and aerial imagery. It renders multi-gigabyte rasters at interactive frame rates using a tile-based LOD system on the GPU, so scientists and analysts can pan and zoom without waiting for data to load.
+
+The application integrates display, band compositing, colormap control, spectral analysis, raster math, and geo-operations in a single Qt6 window. It runs on Linux, macOS, and Windows and opens files via drag-and-drop, a file chooser, or a remote URL — including Cloud-Optimized GeoTIFFs streamed directly from S3 or HTTP.
+
+## Features
+
+### Visualization and Rendering
+
+- OpenGL 4.1 Core Profile tile renderer; 256×256 tile grid with asynchronous decode on a worker thread pool (`max(2, CPU_cores − 1)` threads)
+- Orthographic camera with mouse-drag pan, scroll-wheel zoom, and Space to fit all layers
+- RGB composite mode (select any three bands as R/G/B) and single-band pseudocolor mode
+- MSAA 4× antialiasing; 24-bit depth buffer; all bands stored as `GL_R32F` textures
+- No-data handling: a per-layer no-data value/color is honored, and non-finite (NaN/±Inf) pixels are always rendered transparent — even when the file declares no no-data value; interpolation never bleeds no-data into valid pixels at data boundaries (no spurious edge line)
+- Selectable display resampling (**View → Display Resampling**): bilinear, bicubic (smooth, B-spline), and bicubic (sharp, Catmull-Rom) — all no-data-aware, **seamless across tiles** (no block boundaries), and reverting to crisp nearest pixels at native-or-greater magnification; the choice is per-layer and persisted as the default for new layers
+- Progressive refresh while tiles stream in, with a bounded 30 s repaint budget so a stalled load never repaints indefinitely
+- The camera auto-fits the first layer added; subsequent layers preserve the current view (`Space` re-fits all layers on demand)
+- Drag-and-drop file loading onto the main window
+- Screenshot export (`Ctrl+Shift+S`): captures the map without pane chrome (ID/gear) or border; in a multi-pane layout you choose **Active pane** or **Entire pane layout** (each region's front pane composited at its on-screen position, empty regions filled with the theme canvas background). Hidden colorbars/scale bars are excluded.
+- Dockable panels with a **View → Panels** menu to show/hide each panel and re-open a closed one at its original default location (plus **Reset Panel Layout** to restore the whole default arrangement); panels support nested docking (drop into the upper half, lower half, or full of a side area), and the title-bar float/close buttons use themed vector icons
+
+### Supported File Formats
+
+| Format | Extensions |
+|---|---|
+| GeoTIFF / Cloud-Optimized GeoTIFF (COG) | `.tif` `.tiff` `.geotiff` |
+| NetCDF | `.nc` |
+| HDF5 | `.hdf` `.hdf5` `.h5` |
+| ENVI Image | `.img` |
+| Binary Raw (BSQ / BIL / BIP) | `.bin` `.raw` `.dat` |
+| GDAL Virtual Dataset | `.vrt` |
+| JPEG 2000 | `.jp2` |
+| Remote / Cloud (URL) | `http://` `https://` `/vsicurl/` `/vsis3/` `/vsigs/` |
+
+Binary Raw import dialog lets the user specify lines, samples, bands, data type (uint8 / int16 / uint16 / int32 / uint32 / float32 / float64), interleave (BSQ / BIL / BIP), header offset, and byte order. A hex preview of the first 256 bytes is shown as a reference. COG remote reads use a GDAL VSI curl cache of 128 MB with a 512 KB chunk size.
+
+### Band and Colormap Control
+
+- Band Selector widget: choose R/G/B band indices for composite mode or a single band for pseudocolor mode; the colormap appears only in Gray mode (hosted on the Gray page of the band selector). Switching RGB↔Gray keeps a constant panel geometry (no reflow), and the controls keep a fixed size and full width whether the dock spans half or full of the panel (scrolling when the dock is short rather than squeezing the elements)
+- 6 built-in colormaps: **gray**, **viridis**, **jet**, **hot**, **RdYlGn**, **plasma**
+- All colormaps are 256-entry RGBA8 LUTs uploaded as `GL_TEXTURE_1D` with `GL_LINEAR` filtering
+- Histogram Panel: histogram binned over the full data range, with the view zoomed by default to the Auto-Stretch (1/99) window; draggable min/max stretch handles (the x-window stays fixed while dragging — the spin boxes update live and the view re-settles on release); clip by **value** or by **percentile (0–100 %)** via a mode switch (the two stay in sync, and only the active pair is shown for a compact panel); spin boxes with up/down arrows for both; and an Auto Stretch button that fills the value fields with the 1/99-percentile values and the percentile fields with 1/99
+- In RGB composite mode the Histogram Panel splits into **three per-channel histograms** (R, G, B) with bins coloured red/green/blue (tuned to read with equal visual weight), each with its own value/percentile clip and Auto-Stretch; every channel stretches its band independently in the rendered composite. The panel is scrollable, and the tabbed Layer-Properties/Histogram group defaults to about half the left column's height so the three histograms aren't squished
+- Colormap Legend overlay: draggable gradient strip with 5 labeled ticks, vertical or horizontal orientation (re-anchors to its corner on orientation change); hidden automatically for RGB composite layers, and toggleable per layer via the Layers panel's right-click "Show Colorbar"
+
+### Multi-Pane and Sync
+
+- Add panes at any time via **View → New Pane** (`Ctrl+Shift+N`); the last pane is always kept. A new pane is **independent** (not auto-synced), and each pane has a top-left **ID label + gear menu** (Close / Edit ID / Sync With / Color) and a focus border when active
+- A single, app-wide layer list drives every pane: **each layer belongs to exactly one pane**, and a pane shows only its own layers. Newly opened rasters appear in the **active pane** (the one last clicked); re-assign a layer by dragging it from the Layers panel onto a pane (or a **"To Pane"** context submenu), and dropping a layer on an empty layout region spawns a pane there
+- **Layout modes** (**View → Pane Layout**): Full, Half (side-by-side or top/bottom), and Quarter (2×2). Regions hold a **stack** of panes (a pill strip picks the shown one); place a pane by dragging its ID label onto a region
+- **Per-pane colour-coding**: each pane has a distinct, theme-aware colour that tints its border/ID and its layers' rows, visibility checkboxes, and opacity sliders in the Layers panel
+- **Sync With** (unified master/slave): the gear menu links panes into a group — the invoker becomes the **master** (★), the others **slaves** (mirror icon); linked panes match the master's view and stay linked for pan/zoom, and a shared **ghost cursor** shows the pointer's geographic position in every synced pane. Un-sync (or closing a synced pane) dissolves the group; non-synced panes keep independent cameras
+- **Per-pane pixel inspect**: in inspect mode, left-click reports the pane's representative/active raster, right-click all its visible rasters; results are grouped under a **collapsible drop-down per pane** (header coloured by the pane), and a shared **red highlight square** marks the sampled pixel in every synced pane
+
+### GIS Overlays
+
+- Scale bar (QPainter overlay): auto-scales to a readable distance and performs degree→km conversion (111.32 km/°) for geographic CRS; each pane's scale bar can be shown/hidden from that pane's gear menu ("Show Scale Bar")
+- Coordinate display in the status bar: live lat/lon at the cursor (6 decimal places)
+- Zoom level in the status bar: metres-per-pixel (auto-switching to km/px when large; geographic CRSs use the same 111.32 km/° approximation as the scale bar), tracking the active pane and updating live on wheel/keyboard zoom, fit, and sync
+- CRS name in the status bar: extracted from the active layer's WKT
+- Pixel inspector: `Ctrl+click` reads and displays all band values at the clicked location
+
+### Raster Math
+
+- Expression editor backed by muParser
+- Per-band variables named `L<layer>B<band>` (e.g. `L1B1`, `L2B3`); an expandable layer→band tree lets you click a band to insert its token
+- Live validation with error highlighting; quick-insert buttons for `abs`, `sqrt`, `exp`, `log`, `sin`, `cos`, `min`, `max`
+- Works across layers in **different panes**; an **Input CRS handling** selector reprojects inputs to the output CRS (default) or aligns by pixel — input warping is skipped when all inputs share a CRS — with a live **Reference CRS** readout (the first referenced layer) and a mismatch warning
+- **Output CRS** (distinct loaded CRS) and **Output pane** are chosen **independently**; the Output pane defaults to **New Pane** (created on demand). A warning appears if an existing pane's CRS differs from the Output CRS (on-the-fly display reprojection is deferred)
+- Independent **input/output resampling** (nearest / bilinear / bicubic / lanczos) and optional no-data masking (result is NaN where any input is no-data)
+- A live **result preview** (`Result → <pane> · <CRS>`); tile-by-tile evaluation writes a new GeoTIFF in the output CRS
+- A single **Run** handles both cases: a **temporary output** (default — the file is auto-deleted when its result layer is removed from the Layers Panel) or a **permanent GeoTIFF path** (uncheck "temporary output" and browse). (Consolidates the former separate *Run* and *Run and Save As*.)
+- Example: `(L1B5 - L1B4) / (L1B5 + L1B4)` produces an NDVI layer
+
+### Analysis and Plots
+
+- **Spectral Plot** (`S`): click pixels on the canvas to add multi-band spectra as colored line series; 10-color cycling palette
+- **Scan/Pixel Profile** (`P`): draw an ROI to compute aggregate statistics across scan rows or pixel columns
+  - Modes: Scan (row-wise) / Pixel (column-wise)
+  - Statistics: Mean, Median, Standard Deviation, Quantile (configurable *p* in the range 0.0–1.0)
+- **Layer Info Panel**: file path, CRS, dimensions, band count, no-data value, and per-band statistics
+
+### OpenStreetMap Basemap
+
+- Toggleable XYZ tile basemap rendered beneath all raster layers (which composite over it bottom-to-top); **off by default** on every launch
+- Reprojected into the pane's project CRS so it co-registers **under projected (e.g. UTM) layers**, not only geographic ones — pixel-accurate via per-tile tessellation (each vertex individually transformed), re-warped when the pane's CRS changes
+- Returns to a world view when all layers are cleared (or when enabled with no layers loaded), so the basemap never gets stranded off-screen
+- Standard `{z}/{x}/{y}` URL template; tile source is configurable
+- 512 MB local disk cache (`~/.cache/FlashViewer/osm/`) via `QNetworkDiskCache`
+- Antimeridian wrap handled correctly
+
+### GDAL Operations
+
+- **Merge**: mosaics selected layers to an LZW-compressed GeoTIFF. Inputs in **different CRS** are supported — choose an **Output CRS** and *Reproject to output CRS* (default, a GDAL multi-source warp mosaic) or *Pixel-align* for already co-registered inputs; a note warns when the selection spans multiple CRS
+- **Warp / Reproject**: reprojects to any EPSG code, GeoTIFF output, with a **selectable resampling method** (nearest / bilinear / bicubic / lanczos) that **defaults by data character** — nearest for integer/categorical rasters, bilinear for continuous (float) — so class values are preserved by default. No-data is excluded from the resampling kernel, so cubic/lanczos never smear no-data into valid pixels at swath edges
+- **No-data**: both tabs take an optional **input no-data** (an extra source value to discard, beyond NaN/±Inf) and **output no-data** (stamped into the result GeoTIFF so it is auto-loaded on open)
+- **Output handling**: "Add result to a pane" (with an Output-pane picker incl. "New Pane") and "Use a temporary output file" — a temporary result is **auto-deleted when its layer is removed** from the Layers Panel; uncheck it to keep a permanent file
+- Both operations run asynchronously with a real GDAL progress bar
+
+### Errors, Logging and Security
+
+- **Central error reporting**: GDAL errors and caught exceptions are funnelled
+  through a single `ErrorReporter` into the in-app log and a **dismissable,
+  non-fatal status banner** — the app reports and stays stable instead of crashing
+- **Log panel**: leveled, colour-coded entries with an **Export Logs…** button
+  (saves the log to a `.txt`/`.log` of your choice) and a **Clear** button
+- **Application log file**: a size-bounded **rotating log** is written to the
+  per-user app-data directory (`%APPDATA%/FlashViewer/logs/flashviewer.log` on
+  Windows; `~/.local/share/FlashViewer/logs/` on Linux;
+  `~/Library/Application Support/FlashViewer/logs/` on macOS)
+- **Remote-URL security (SSRF hardening)**: user-supplied URLs pass a `UrlGuard`
+  check before any fetch — only `http`/`https`/`/vsicurl/`/`/vsis3/`/`/vsigs/`
+  schemes are allowed, and hosts resolving to loopback/link-local/private/cloud-
+  metadata ranges (e.g. `169.254.169.254`, `10/8`, `127/8`) are blocked. TLS
+  certificate verification is always on; HTTP redirects, retries and timeouts are
+  bounded (`GDAL_HTTP_*`), and decoder memory is capped (`GDAL_CACHEMAX`)
+- **GPU-context resilience**: on OpenGL context loss the canvas rebuilds its GL
+  resources rather than terminating
+
+### GPU Monitor
+
+- A dockable **GPU Monitor** panel (View → Panels) shows a live sparkline and
+  readout of **estimated GPU memory** held by resident raster tiles as they are
+  uploaded and evicted, summed across panes, alongside the GPU renderer/vendor/GL
+  version. The figure is an estimate (bands × width × height × 4 bytes), not a
+  driver query, and the same accounting bounds VRAM use under pressure
+
+### Performance HUD
+
+- An optional on-canvas **Performance HUD** (**View → Performance HUD**, off by
+  default, remembered across sessions) overlays live performance readouts — frame
+  rate and frame-time percentiles (avg/p99/max), the last file-open first-tiles
+  latency, the main-thread stall count, and this pane's estimated VRAM — making the
+  performance KPIs observable at a glance; a frame over the 100 ms budget is flagged.
+  A build compiled with `-DFV_PERF_INSTRUMENT=ON` additionally logs verbose
+  per-operation timings for benchmarking
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+O` | Open raster file |
+| `Ctrl+U` | Open remote URL / COG |
+| `Space` | Fit camera to all loaded layers |
+| `Ctrl+M` | Raster Math expression editor |
+| `S` | Spectral Plot window |
+| `P` | Scan/Pixel Profile window |
+| `Ctrl+Shift+N` | Add new pane |
+| `Ctrl+Q` | Quit |
+| `Ctrl+click` | Pixel inspect (all bands at clicked location) |
+
+## Architecture
+
+### Rendering Pipeline
+
+```
+Disk
+  → GDALDataset::RasterIO  (worker thread; one mutex per dataset)
+  → float32 tile buffer    (256×256 pixels, N bands)
+  → GL_R32F Texture2D      (one texture per band per tile)
+  → tile.vert              (geo coordinates → NDC via orthographic view-proj)
+  → tile_rgb.frag          (sample 3 band textures; per-band linear stretch → RGB)
+    OR tile_gray.frag      (sample 1 band texture; stretch to [0,1]; index GL_TEXTURE_1D colormap LUT)
+  → Framebuffer            (MSAA 4×)
+```
+
+LOD zoom level: `floor(log2(native_resolution / screen_resolution_at_scale))`
+
+### Layer Model
+
+Every data source — raw bands, raster math result, imported raster — is a `RasterLayer`. `LayerManager` owns an ordered list and emits Qt signals (`layerAdded`, `layerRemoved`, `layerChanged`) that drive the UI, renderer, histogram, and spectral plotter.
+
+### Threading Model
+
+The UI thread never blocks. GDAL I/O and tile decode run on a fixed `ThreadPool`. Heavy operations (warp, merge) run on a dedicated `GdalWorker` (`QThread`) and report progress via Qt signals. Network tile fetches for the OSM basemap are dispatched through Qt's non-blocking `QNetworkAccessManager`.
+
+### Colormap System
+
+Each colormap is a `std::array<glm::u8vec4, 256>` loaded from a built-in definition at startup. It is uploaded once as a `GL_TEXTURE_1D` (`GL_RGBA8`, 256 texels, `GL_LINEAR`). The fragment shader samples it: `texture(u_colormap, stretch(v))` → RGBA.
+
+### Tile Cache
+
+LRU cache with a default capacity of 512 tiles. Cache key: `TileKey = {layer_id, zoom, tx, ty}`. Each entry holds a GL texture handle. Evicted entries release their GPU memory immediately. Eviction is bounded by both the tile count **and** a byte budget (`residentBytes()`, GL_R32F = bands × width × height × 4); the same estimate feeds the GPU Monitor panel and degrades gracefully under `GL_OUT_OF_MEMORY`.
+
+## Version Releases
+
+| Version | Date | Notes |
+|---|---|---|
+| 0.1.0 | 2026-07-22 | **Complete base release.** Implementation revamp Phases 0–12 (test infrastructure, rendering/resampling, multi-pane + sync, on-the-fly per-pane CRS reprojection, GDAL ops, error handling & SSRF guard, performance instrumentation + HUD) closed by the Phase-14 conformance sync; Linux, macOS, and Windows CI; **113 automated tests passing**. Accessibility, i18n, packaging/installers, and the license audit are deferred to 0.2.0 (SRS Appendix E). |
+
+## Building
+
+FlashViewer builds on Linux, macOS, and Windows. Two provisioning options:
+
+- **Native (default):** system packages — `apt`/`dnf` on Linux, Homebrew on macOS,
+  and conda-forge + `aqtinstall` on Windows.
+- **conda (optional):** a self-contained conda-forge environment (deps **and** Qt)
+  via `environment-linux.yml` / `environment-macos.yml` / `environment-windows.yml`
+  — no system `-dev` packages or `sudo` required. NetCDF/HDF5 support comes from the
+  `libgdal-netcdf` / `libgdal-hdf5` driver plugins listed in those env files.
+
+See [INSTALL.md](INSTALL.md) for full instructions.
+
+## License
+
+FlashViewer is released under the [MIT License](LICENSE). The product license and
+the licenses of all bundled third-party components are viewable in-app via
+**Help → Licenses** and listed in [`THIRD_PARTY_LICENSES.md`](../resources/THIRD_PARTY_LICENSES.md).

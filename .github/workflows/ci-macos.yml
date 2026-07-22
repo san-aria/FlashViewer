@@ -1,0 +1,75 @@
+name: CI macOS
+
+on:
+  push:
+    branches: [main, "claude/**", "v*-claude"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-and-test:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies via Homebrew
+        run: |
+          brew update
+          brew install cmake ninja qt@6 gdal muparser spdlog glm nlohmann-json catch2
+
+      - name: Configure
+        run: |
+          cmake --preset macos-release \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6);$(brew --prefix gdal);$(brew --prefix muparser);$(brew --prefix spdlog);$(brew --prefix glm);$(brew --prefix nlohmann-json);$(brew --prefix catch2)"
+
+      - name: Build
+        run: cmake --build build/macos-release --parallel
+
+      - name: Test
+        run: |
+          cd build/macos-release
+          QT_QPA_PLATFORM=offscreen ctest --output-on-failure
+
+      - name: Package (DMG)
+        run: |
+          APP="build/macos-release/FlashViewer.app"
+          MACDEPLOYQT="$(brew --prefix qt@6)/bin/macdeployqt"
+
+          # Deploy Qt frameworks and all transitive dylib dependencies.
+          # -libpath adds the Homebrew lib directory so macdeployqt can locate
+          # dylibs whose install names use the @executable_path prefix (common in
+          # GDAL's OpenEXR and other transitive Homebrew dependencies).
+          # -codesign=- applies an ad-hoc signature to each copied/modified dylib
+          # immediately, preventing the "invalid signature" error that arises when
+          # a pre-signed Homebrew dylib is patched by install_name_tool.
+          "$MACDEPLOYQT" "$APP" \
+            -libpath="$(brew --prefix)/lib" \
+            -libpath="$(brew --prefix qt@6)/lib" \
+            -codesign=- \
+            -verbose=1
+
+          # Deep re-sign pass to cover any dylibs macdeployqt still skipped.
+          # --deep recurses into all nested frameworks; --force overrides any
+          # existing (potentially invalid) signatures left from the Homebrew builds.
+          codesign --deep --force --sign - "$APP"
+
+          # Create a compressed DMG from the now-signed app bundle.
+          # hdiutil is used here instead of macdeployqt -dmg to avoid a second
+          # deployment pass that would re-run install_name_tool and break signatures.
+          hdiutil create \
+            -volname "FlashViewer" \
+            -srcfolder "$APP" \
+            -ov -format UDZO \
+            FlashViewer-macos.dmg
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: FlashViewer-macos
+          path: FlashViewer-macos.dmg

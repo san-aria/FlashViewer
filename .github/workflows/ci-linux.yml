@@ -1,0 +1,54 @@
+name: CI Linux
+
+on:
+  push:
+    branches: [main, "claude/**", "v*-claude"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build pkg-config \
+            qt6-base-dev qt6-base-dev-tools \
+            qt6-charts-dev \
+            qt6-svg-dev \
+            libgdal-dev \
+            libmuparser-dev \
+            libspdlog-dev \
+            nlohmann-json3-dev \
+            libglm-dev \
+            catch2 \
+            libgl-dev \
+            libxkbcommon-dev \
+            xvfb
+
+      - name: Configure
+        run: cmake --preset linux-release
+
+      - name: Build
+        run: cmake --build build/linux-release --parallel
+
+      - name: Test (headless)
+        run: |
+          cd build/linux-release
+          xvfb-run -a ctest --output-on-failure
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: FlashViewer-linux
+          path: build/linux-release/FlashViewer

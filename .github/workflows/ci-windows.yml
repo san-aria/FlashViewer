@@ -1,0 +1,91 @@
+name: CI Windows
+
+on:
+  push:
+    branches: [main, "claude/**", "v*-claude"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-and-test:
+    runs-on: windows-2022
+
+    defaults:
+      run:
+        # setup-miniconda runs `conda init powershell`; pwsh lets `conda activate`
+        # work in each step. MSVC env (from msvc-dev-cmd) and Qt env (from
+        # install-qt-action) are exported to GITHUB_ENV, so they apply here too.
+        shell: pwsh
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Qt6 via aqtinstall
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.6.3'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2019_64'
+          modules: 'qtcharts'
+          cache: true
+
+      - name: Setup conda environment (dependencies)
+        # conda-forge ships prebuilt GDAL/muParser/spdlog/glm/nlohmann_json/Catch2
+        # with CMake config files that satisfy find_package(... CONFIG). This
+        # replaces the former vcpkg manifest install (no source compile, no
+        # github/gitlab source downloads).
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          environment-file: environment-windows.yml
+          activate-environment: flashviewer-windows
+          auto-activate-base: false
+
+      - name: Configure
+        # No vcpkg toolchain. find_package locates deps via CMAKE_PREFIX_PATH:
+        # the conda env's Library prefix + the aqt Qt root.
+        run: |
+          conda activate flashviewer-windows
+          cmake --preset windows-release `
+            -DCMAKE_PREFIX_PATH="$env:CONDA_PREFIX/Library;$env:QT_ROOT_DIR"
+
+      - name: Build
+        run: |
+          conda activate flashviewer-windows
+          cmake --build build/windows-release --parallel
+
+      - name: Test
+        run: |
+          conda activate flashviewer-windows
+          cd build/windows-release
+          ctest --output-on-failure
+
+      - name: Deploy Qt + GDAL DLLs
+        run: |
+          conda activate flashviewer-windows
+          $exe = Get-ChildItem -Recurse -Filter "FlashViewer.exe" "build\windows-release" |
+                 Select-Object -First 1 -ExpandProperty FullName
+          if (-not $exe) { throw "FlashViewer.exe not found in build output" }
+          Write-Host "Found exe at: $exe"
+          $dir = Split-Path -Parent $exe
+          # Qt frameworks/plugins:
+          windeployqt "$exe"
+          # GDAL and its transitive runtime DLLs live in the conda env, not next
+          # to the exe — copy them so the artifact runs on a clean machine.
+          Copy-Item "$env:CONDA_PREFIX\Library\bin\*.dll" $dir -Force
+          "EXE_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: FlashViewer-windows
+          path: ${{ env.EXE_DIR }}\

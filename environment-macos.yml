@@ -1,0 +1,41 @@
+name: flashviewer-macos
+channels:
+  - conda-forge
+dependencies:
+  - gdal>=3.8
+  # conda-forge ships GDAL format drivers as separate plugins; libgdal-core alone
+  # has only GTiff/VRT. These add the NetCDF and HDF5 drivers (FR-IO-4).
+  - libgdal-netcdf
+  - libgdal-hdf5
+  - spdlog
+  - nlohmann_json
+  - glm
+  - muparser
+  - catch2>=3
+  - cmake>=3.25
+  - ninja
+  # Self-contained: Qt6 (incl. Charts + Svg) comes from conda-forge too — no
+  # Homebrew and no aqtinstall needed on macOS.
+  - qt6-main
+  - qt6-charts
+  - qt6-svg
+
+# ===========================================================================
+# macOS conda build — read before you build/run
+# ===========================================================================
+# This is the OPTIONAL conda path. The default macOS build uses Homebrew — see
+# INSTALL.md. Works on both osx-64 (Intel) and osx-arm64 (Apple Silicon); conda
+# installs the package set matching your machine's architecture. Activate, then:
+#   conda activate flashviewer-macos
+#   cmake --preset macos-release -DCMAKE_PREFIX_PATH="$CONDA_PREFIX"
+#
+# --- OpenGL note --------------------------------------------------------------
+# macOS exposes OpenGL 4.1 Core as its MAXIMUM version — which is exactly what
+# FlashViewer targets, so the system OpenGL framework is sufficient. Do NOT add
+# `mesa`; it would shadow the system GL with software rendering.
+#
+# --- Qt platform plugin note --------------------------------------------------
+# The `cocoa` platform plugin shipped in qt6-main works without extra setup.
+# For headless test runs use the offscreen platform:
+#   export QT_QPA_PLATFORM=offscreen
+# ===========================================================================

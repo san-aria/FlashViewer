@@ -1,0 +1,1797 @@
+#include "app/MainWindow.hpp"
+#include "app/Application.hpp"
+#include "app/GpuInfoDialog.hpp"
+#include "app/AboutLicensesDialog.hpp"
+#include "app/NetCdfAssignDialog.hpp"
+#include "app/Settings.hpp"
+#include "plots/SpectralPlotWindow.hpp"
+#include "plots/ScanPixProfileWindow.hpp"
+#include "render/MapCanvas.hpp"
+#include "render/PaneLayout.hpp"
+#include "core/RasterLayer.hpp"
+#include "core/LayerManager.hpp"
+#include "io/DatasetFactory.hpp"
+#include "io/BinaryImportDialog.hpp"
+#include "io/BinaryRasterParser.hpp"
+#include "io/CloudReader.hpp"
+#include "io/UrlGuard.hpp"
+#include "util/Logger.hpp"
+#include "util/ErrorReporter.hpp"
+#include "util/TempFile.hpp"
+#include "util/PerfMetrics.hpp"
+#include <QElapsedTimer>
+#include "panels/GpuMonitorPanel.hpp"
+#include "panels/MarqueeLabel.hpp"
+#include "panels/LayerPanel.hpp"
+#include "panels/HistogramPanel.hpp"
+#include "panels/BandSelectorWidget.hpp"
+#include "panels/ColormapSelectorWidget.hpp"
+#include "panels/RasterInfoPanel.hpp"
+#include "panels/NoDataWidget.hpp"
+#include "gis/AttributeInspector.hpp"
+#include "gis/CrsUtil.hpp"
+#include "gis/CrsPickerDialog.hpp"
+#include "math/RasterMathDialog.hpp"
+#include "gis/GdalOpsDialog.hpp"
+#include "render/ColormapLegend.hpp"
+#include "render/OsmTileRenderer.hpp"
+
+#include <QMenuBar>
+#include <QMenu>
+#include <QAction>
+#include <QActionGroup>
+#include <QSignalBlocker>
+#include <QStackedWidget>
+#include <QScrollArea>
+#include <QToolBar>
+#include <QToolButton>
+#include <QStatusBar>
+#include <QDockWidget>
+#include <QPlainTextEdit>
+#include <QLabel>
+#include <QEvent>
+#include <QCloseEvent>
+#include <QScrollBar>
+#include <QApplication>
+#include <QDir>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QPixmap>
+#include <QMessageBox>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QFrame>
+#include <QTimer>
+#include <QFile>
+#include <QTextStream>
+#include <QMimeData>
+#include <QDragEnterEvent>
+#include <QColorDialog>
+#include <QUrl>
+#include <QInputDialog>
+#include <QPainter>
+#include <QLineEdit>
+#include <QListWidget>
+#include <QDialogButtonBox>
+#include <spdlog/spdlog.h>
+#include <algorithm>
+
+static const char* kLevelColorsDark[] = {
+    "#848d97",  // TRACE    — fg-muted
+    "#58a6ff",  // DEBUG    — accent-fg
+    "#e6edf3",  // INFO     — fg-default
+    "#d29922",  // WARN     — attention-fg
+    "#f85149",  // ERROR    — danger-fg
+    "#ff7b72",  // CRITICAL
+    "#e6edf3",  // OFF
+};
+static const char* kLevelColorsLight[] = {
+    "#6e7781",  // TRACE    — fg-subtle   (4.6:1 on #fff)
+    "#0969da",  // DEBUG    — accent-fg   (4.6:1)
+    "#1f2328",  // INFO     — fg-default  (16:1)
+    "#9a6700",  // WARN     — attention-fg(4.7:1)
+    "#cf222e",  // ERROR    — danger-fg   (5.5:1)
+    "#a40e26",  // CRITICAL              (6.8:1)
+    "#1f2328",  // OFF
+};
+
+MainWindow::MainWindow(QWidget* parent)
+    : QMainWindow(parent)
+{
+    setWindowTitle("FlashViewer");
+    setMinimumSize(900, 600);
+    resize(1280, 800);
+    setAcceptDrops(true);
+
+    m_layer_mgr = new LayerManager(this);            // single app-wide layer model
+    m_pane_layout = new PaneLayout(m_layer_mgr, this);
+    m_canvas = m_pane_layout->addPane(false);        // primary pane (Pane 1, active)
+
+    // Central area: a non-fatal error banner (FR-ERR-8), hidden until ErrorReporter
+    // reports a warning/error, above the pane layout.
+    auto* central = new QWidget(this);
+    auto* centralLay = new QVBoxLayout(central);
+    centralLay->setContentsMargins(0, 0, 0, 0);
+    centralLay->setSpacing(0);
+    m_error_banner = new QFrame(central);
+    m_error_banner->setObjectName("ErrorBanner");
+    m_error_banner->setVisible(false);
+    {
+        auto* bl = new QHBoxLayout(m_error_banner);
+        bl->setContentsMargins(8, 3, 8, 3);   // even, slim — a sleek bar hugging its text (FR-CRS-6)
+        bl->setSpacing(6);
+        m_error_banner_label = new MarqueeLabel(m_error_banner);   // single-line, marquee on overflow
+        auto* closeBtn = new QToolButton(m_error_banner);
+        closeBtn->setText(QStringLiteral("✕"));
+        closeBtn->setAutoRaise(true);
+        closeBtn->setToolTip(tr("Dismiss"));
+        closeBtn->setFocusPolicy(Qt::NoFocus);
+        closeBtn->setFixedSize(18, 18);        // compact — don't inflate the bar height
+        connect(closeBtn, &QToolButton::clicked, m_error_banner, &QWidget::hide);
+        bl->addWidget(m_error_banner_label, 1);
+        bl->addWidget(closeBtn, 0);
+    }
+    centralLay->addWidget(m_error_banner);
+    centralLay->addWidget(m_pane_layout, 1);
+    setCentralWidget(central);
+
+    m_banner_timer = new QTimer(this);
+    m_banner_timer->setSingleShot(true);
+    connect(m_banner_timer, &QTimer::timeout, this, [this] {
+        if (m_error_banner) m_error_banner->hide();
+    });
+    // Route every ErrorReporter report (GDAL errors, caught exceptions) to the
+    // banner; queued so worker-thread reports land on the UI thread safely.
+    connect(&ErrorReporter::instance(), &ErrorReporter::reported,
+            this, &MainWindow::showErrorBanner);
+
+    // A pane selected via its region pill / dragged into a region becomes active (6.4).
+    connect(m_pane_layout, &PaneLayout::paneActivationRequested, this, [this](uint64_t pid) {
+        for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+            if (m_pane_layout->paneId(i) == pid) { setActivePane(i); break; }
+    });
+
+    // Sync roles changed (Phase 6.5): refresh each pane's role icon (★/mirror) and clear any
+    // stale ghost-cursor markers.
+    connect(m_pane_layout, &PaneLayout::syncRolesChanged, this, [this] {
+        for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+            if (auto* c = m_pane_layout->paneCanvas(i)) {
+                c->setSyncRole(m_pane_layout->syncRoleAt(i));
+                c->setGhostCursor(0, 0, false);
+                c->update();
+            }
+    });
+
+    // A layer dropped onto a region: create a pane there if the region is empty, then assign
+    // the layer to that pane (Phase 6.4.1, Issue 4). A populated region routes to its front pane.
+    connect(m_pane_layout, &PaneLayout::layerDroppedOnRegion, this,
+            [this](int layerIndex, int region) {
+        uint64_t target = 0;
+        if (m_pane_layout->regionIsEmpty(region)) {
+            addPane();                                       // full wiring (colour/label/theme/OSM)
+            const int newIdx = m_pane_layout->paneCount() - 1;
+            const uint64_t newPid = m_pane_layout->paneId(newIdx);
+            m_pane_layout->movePaneToRegion(newPid, region); // place the new pane in the dropped region
+            target = newPid;
+        } else {
+            target = m_pane_layout->frontPaneIdInRegion(region);
+        }
+        if (target) assignLayerToPane(layerIndex, target);
+    });
+
+    // Allow docking to the upper/lower half (or full) of a side area, not just
+    // tab/replace, so a dragged panel snaps into split positions (FR-APP-10).
+    setDockNestingEnabled(true);
+
+    setupMenuBar();
+    setupToolBar();
+    setupDocks();
+    setupStatusBar();
+    restoreLayout();
+
+    auto* app = qobject_cast<Application*>(qApp);
+    if (app) {
+        connect(app, &Application::themeChanged, this, &MainWindow::onThemeChanged);
+        m_canvas->setDarkBackground(app->currentTheme() == Theme::Dark);
+    }
+
+    QObject* relay = Logger::instance().relay();
+    if (relay) {
+        connect(relay, SIGNAL(messageLogged(int, const QString&)),
+                this,  SLOT(appendLog(int, const QString&)),
+                Qt::QueuedConnection);
+    }
+
+    // Per-canvas signals (status bar, inspect, pane activation) for the primary pane.
+    // wireCanvasSignals is called again for every pane added later (Phase 6).
+    wireCanvasSignals(m_canvas);
+    m_canvas->setPaneLabel(m_pane_layout->paneLabel(0));
+    // The default startup pane is coloured with the theme accent blue (Phase 6.2.1);
+    // its layers are colour-coded like any other pane.
+    {
+        const QColor accent = qApp->palette().highlight().color();
+        m_pane_layout->setPaneColor(0, accent);
+        m_canvas->setPaneColor(accent);
+        if (m_layer_panel) m_layer_panel->refreshPaneColors();
+    }
+    m_canvas->setActive(true);   // primary pane starts active (highlight border)
+
+    // Apply persisted OSM tile URL (may differ from the compiled-in default)
+    m_canvas->osmRenderer()->provider()->setUrlTemplate(
+        Settings::instance().osmTileUrl());
+
+    // GPU Monitor poll (FR-APP-11): sum every pane's estimated resident VRAM.
+    m_gpu_timer = new QTimer(this);
+    m_gpu_timer->setInterval(250);
+    connect(m_gpu_timer, &QTimer::timeout, this, [this] {
+        if (!m_gpu_monitor || !m_pane_layout) return;
+        std::size_t bytes = 0; int tiles = 0;
+        const int panes = m_pane_layout->paneCount();
+        for (int i = 0; i < panes; ++i)
+            if (auto* c = m_pane_layout->paneCanvas(i)) {
+                bytes += c->gpuResidentBytes();
+                tiles += c->gpuResidentTiles();
+            }
+        m_gpu_monitor->addSample(bytes, tiles, panes);
+        const auto& gi = m_canvas->glInfo();
+        m_gpu_monitor->setGpuIdentity(gi.renderer, gi.vendor, gi.version);
+    });
+    m_gpu_timer->start();
+
+    // Main-thread stall detector (NFR-PERF-2, Phase 12): a fixed-interval watchdog on
+    // the UI event loop. When the gap between ticks exceeds the interval by more than
+    // the 50 ms stall threshold, the loop was blocked → record a stall (feeds the HUD;
+    // the verbose log line is gated behind FV_PERF_INSTRUMENT).
+    constexpr int kStallCheckIntervalMs = 250;
+    m_stall_timer = new QTimer(this);
+    m_stall_timer->setInterval(kStallCheckIntervalMs);
+    connect(m_stall_timer, &QTimer::timeout, this, [this] {
+        static QElapsedTimer clock;
+        if (!clock.isValid()) { clock.start(); return; }
+        const double actual = double(clock.restart());
+        if (fvIsStall(kStallCheckIntervalMs, actual)) {
+            const double over = actual - kStallCheckIntervalMs;
+            PerfMetrics::instance().recordStall("ui", over);
+#ifdef FV_PERF_INSTRUMENT
+            FV_WARN("perf: UI-thread stall {:.0f} ms (NFR-PERF-2)", over);
+#endif
+        }
+    });
+    m_stall_timer->start();
+
+    // Apply the persisted Performance HUD state (FR-APP-14) to the primary pane.
+    if (Settings::instance().perfHudVisible() && m_canvas)
+        m_canvas->setPerfHudVisible(true);
+
+    FV_INFO("MainWindow ready");
+}
+
+MainWindow::~MainWindow() = default;
+
+// --------------------------------------------------------------------------
+
+void MainWindow::openFiles(const QStringList& paths) {
+    for (const auto& path : paths) {
+        const std::string stdPath = path.toStdString();
+        bool needsBinary = false;
+
+        // For NetCDF/HDF5 files: ALWAYS enumerate subdatasets first and show
+        // the picker even if GDAL could open the file directly. This prevents
+        // GDAL from silently choosing the first/wrong variable.
+        if (DatasetFactory::isMultiVariableFormat(stdPath)) {
+            auto subs = DatasetFactory::listSubdatasets(stdPath);
+            if (!subs.empty()) {
+                QList<int> selected = showSubdatasetMultiPicker(path, subs);
+                if (selected.isEmpty()) continue;
+                for (int idx : selected) {
+                    auto sub_ds = DatasetFactory::openSubdataset(
+                        subs[static_cast<size_t>(idx)].first);
+                    if (!sub_ds) continue;
+                    auto layer = std::make_shared<RasterLayer>(sub_ds);
+                    layer->initSubdatasetMeta(stdPath, subs, idx);
+                    layer->setName(DatasetFactory::extractVarName(
+                        subs[static_cast<size_t>(idx)].first));
+                    // If geotransform is identity: offer coordinate assignment dialog
+                    if (sub_ds->isGeoTransformIdentity()) {
+                        auto coords = showNetCdfAssignDialog(path, stdPath, sub_ds, subs);
+                        if (coords) {
+                            sub_ds->setGeoTransformOverride(coords->gt);
+                            if (!coords->crs_wkt.empty())
+                                sub_ds->setCrsOverride(coords->crs_wkt);
+                        }
+                    }
+                    layer->setPaneId(activePaneId());   // display on the active pane
+                    PerfMetrics::instance().markOpenStart(layer->layerId());  // NFR-PERF-3/4
+                    m_layer_mgr->addLayer(layer);
+                    FV_INFO("Loaded subdataset '{}' from '{}'",
+                            subs[static_cast<size_t>(idx)].first, stdPath);
+                }
+                statusBar()->showMessage(
+                    tr("Loaded %1 variable(s) from %2")
+                        .arg(selected.size())
+                        .arg(QFileInfo(path).fileName()), 4000);
+                continue;
+            }
+            // No subdatasets listed — fall through to direct open (single-variable file)
+        }
+
+        auto ds = DatasetFactory::open(stdPath, &needsBinary);
+
+        if (needsBinary) {
+            BinaryImportDialog dlg(path, this);
+            if (dlg.exec() != QDialog::Accepted) continue;
+            auto spec = dlg.spec();
+            std::string vrt = createVrtForBinary(spec);
+            if (vrt.empty()) {
+                // Non-fatal report (FR-ERR-1 precursor; full ErrorReporter in Phase 10):
+                // log + transient status message instead of a blocking modal.
+                FV_WARN("Binary import failed: could not create VRT for '{}'", stdPath);
+                statusBar()->showMessage(
+                    tr("Import failed: could not build VRT for %1")
+                        .arg(QFileInfo(path).fileName()), 6000);
+                continue;
+            }
+            ds = DatasetFactory::open(vrt);
+        }
+
+        if (!ds) {
+            FV_WARN("Open failed: could not open '{}'", stdPath);
+            statusBar()->showMessage(
+                tr("Open failed: %1").arg(QFileInfo(path).fileName()), 6000);
+            continue;
+        }
+
+        auto layer = std::make_shared<RasterLayer>(ds);
+        layer->setPaneId(activePaneId());   // display on the active pane
+        PerfMetrics::instance().markOpenStart(layer->layerId());   // NFR-PERF-3/4 probe
+        m_layer_mgr->addLayer(layer);
+        FV_INFO("Loaded '{}'", stdPath);
+        statusBar()->showMessage(tr("Loaded: %1").arg(QFileInfo(path).fileName()), 4000);
+    }
+}
+
+QList<int> MainWindow::showSubdatasetMultiPicker(
+    const QString& path,
+    const std::vector<std::pair<std::string,std::string>>& subs)
+{
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("Select Variables"));
+    dlg.setMinimumWidth(400);
+    auto* lay = new QVBoxLayout(&dlg);
+    lay->addWidget(new QLabel(
+        tr("File: %1\nCtrl+click to select multiple variables:")
+            .arg(QFileInfo(path).fileName()), &dlg));
+    auto* list = new QListWidget(&dlg);
+    list->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    for (const auto& [name, desc] : subs)
+        list->addItem(QString::fromStdString(desc.empty() ? name : desc));
+    if (list->count() > 0) list->setCurrentRow(0);
+    lay->addWidget(list);
+    auto* btns = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    lay->addWidget(btns);
+
+    if (dlg.exec() != QDialog::Accepted) return {};
+    QList<int> result;
+    for (auto* item : list->selectedItems())
+        result << list->row(item);
+    return result;
+}
+
+std::optional<MainWindow::AssignedCoords> MainWindow::showNetCdfAssignDialog(
+    const QString& displayPath,
+    const std::string& parentPath,
+    const std::shared_ptr<RasterDataset>& ds,
+    const std::vector<std::pair<std::string,std::string>>& subs)
+{
+    QString varName = QFileInfo(displayPath).fileName();
+    NetCdfAssignDialog dlg(varName, parentPath, subs, ds, this);
+    if (dlg.exec() != QDialog::Accepted) return std::nullopt;
+    auto a = dlg.assignment();
+    if (!a) return std::nullopt;
+    AssignedCoords coords;
+    std::copy(a->gt, a->gt + 6, coords.gt);
+    coords.crs_wkt = a->crs_wkt;
+    return coords;
+}
+
+
+void MainWindow::setupMenuBar() {
+    // ---- File ----
+    auto* fileMenu = menuBar()->addMenu(tr("&File"));
+
+    auto* actOpen = fileMenu->addAction(tr("&Open…"));
+    actOpen->setShortcut(QKeySequence::Open);
+    connect(actOpen, &QAction::triggered, this, [this] {
+        QStringList files = QFileDialog::getOpenFileNames(
+            this, tr("Open Raster"),
+            QString(),
+            QString::fromUtf8(DatasetFactory::openFilter()));
+        if (!files.isEmpty())
+            ErrorReporter::runGuarded("Open", [&] { openFiles(files); });
+    });
+
+    auto* actOpenUrl = fileMenu->addAction(tr("Open &URL (COG)…"));
+    actOpenUrl->setShortcut(QKeySequence("Ctrl+U"));
+    connect(actOpenUrl, &QAction::triggered, this, [this] {
+        bool ok;
+        QString url = QInputDialog::getText(this, tr("Open Cloud/COG URL"),
+            tr("Enter URL (http/https/s3/gs):"), QLineEdit::Normal, {}, &ok);
+        if (!ok || url.isEmpty()) return;
+        // Early SSRF/scheme rejection with immediate modal feedback (FR-SEC-1/2/3);
+        // CloudReader re-checks as defense-in-depth on the open path.
+        UrlGuard::Result guard = UrlGuard::check(url.toStdString());
+        if (!guard.ok) {
+            FV_WARN("Open URL rejected: {}", guard.reason.toStdString());
+            QMessageBox::warning(this, tr("URL Rejected"), guard.reason);
+            return;
+        }
+        ErrorReporter::runGuarded("Open URL", [&] { openFiles({url}); });
+    });
+
+    fileMenu->addSeparator();
+
+    auto* actTileSource = fileMenu->addAction(tr("OSM &Tile Source…"));
+    connect(actTileSource, &QAction::triggered, this, [this] {
+        OsmTileProvider* prov = m_canvas->osmRenderer()->provider();
+        bool ok;
+        QString url = QInputDialog::getText(this,
+            tr("OSM Tile Source"),
+            tr("Enter tile URL template ({z}, {x}, {y} placeholders):\n"
+               "Example: https://tile.openstreetmap.org/{z}/{x}/{y}.png"),
+            QLineEdit::Normal,
+            prov->urlTemplate(),
+            &ok);
+        if (ok && !url.isEmpty()) {
+            prov->setUrlTemplate(url);
+            Settings::instance().setOsmTileUrl(url);
+            m_canvas->clearOsmCache();
+            m_canvas->update();
+        }
+    });
+
+    fileMenu->addSeparator();
+
+    auto* actExit = fileMenu->addAction(tr("E&xit"));
+    actExit->setShortcut(QKeySequence::Quit);
+    // close() (not qApp->quit()) so closeEvent fires and FR-APP-6 state is
+    // persisted on Ctrl+Q; quitOnLastWindowClosed (default) then exits the app.
+    connect(actExit, &QAction::triggered, this, [this]{ close(); });
+
+    // ---- View ----
+    auto* viewMenu = menuBar()->addMenu(tr("&View"));
+
+    auto* themeMenu  = viewMenu->addMenu(tr("&Theme"));
+    auto* themeGroup = new QActionGroup(this);
+
+    auto* actLight = themeMenu->addAction(tr("&Light"));
+    actLight->setCheckable(true);
+    themeGroup->addAction(actLight);
+
+    auto* actDark = themeMenu->addAction(tr("&Dark"));
+    actDark->setCheckable(true);
+    themeGroup->addAction(actDark);
+
+    auto* app = qobject_cast<Application*>(qApp);
+    if (app) {
+        bool isDark = (app->currentTheme() == Theme::Dark);
+        actDark->setChecked(isDark);
+        actLight->setChecked(!isDark);
+
+        connect(actLight, &QAction::triggered, this, [app]{ app->applyTheme(Theme::Light); });
+        connect(actDark,  &QAction::triggered, this, [app]{ app->applyTheme(Theme::Dark);  });
+
+        connect(app, &Application::themeChanged, this, [actLight, actDark](Theme t) {
+            actDark->setChecked(t == Theme::Dark);
+            actLight->setChecked(t == Theme::Light);
+        });
+    }
+
+    viewMenu->addSeparator();
+    auto* actFit = viewMenu->addAction(tr("&Fit to Layers"));
+    actFit->setShortcut(Qt::Key_Space);
+    connect(actFit, &QAction::triggered, this,
+            [this]{ if (auto* c = activeCanvas()) c->fitToLayers(); });
+
+    auto* actFitActive = viewMenu->addAction(tr("Fit to &Active Layer"));
+    actFitActive->setShortcut(Qt::Key_F);
+    connect(actFitActive, &QAction::triggered, this, [this] {
+        auto active = m_layer_mgr->activeLayer();
+        if (!active || active->type() != LayerType::Raster) {
+            m_canvas->fitToLayers();
+            return;
+        }
+        auto ext = static_cast<RasterLayer*>(active.get())->extent();
+        if (!ext.isValid()) { m_canvas->fitToLayers(); return; }
+        Camera cam = m_canvas->camera();
+        cam.fitToExtent(ext);
+        m_canvas->setCamera(cam);
+        m_canvas->update();
+    });
+
+    viewMenu->addSeparator();
+    auto* actOsm = viewMenu->addAction(tr("&OSM Basemap"));
+    actOsm->setCheckable(true);
+    actOsm->setChecked(m_canvas->osmRenderer()->isEnabled());
+    connect(actOsm, &QAction::toggled, this, [this](bool on) {
+        // The basemap is an app-wide toggle: apply to every pane (Phase 6).
+        for (int i = 0; i < m_pane_layout->paneCount(); ++i) {
+            auto* c = m_pane_layout->paneCanvas(i);
+            if (!c) continue;
+            c->osmRenderer()->setEnabled(on);
+            // Turning the basemap on with a pane that has no layers: show the world.
+            if (on && c->paneId() && m_layer_mgr->count() == 0)
+                c->resetToWorldView();
+            c->update();
+        }
+    });
+
+    // ---- Performance HUD (FR-APP-14, Phase 12) ----
+    // App-wide overlay of live frame stats / open-latency / stalls / VRAM, mirroring
+    // the OSM-basemap toggle: applied to every pane and persisted.
+    auto* actPerfHud = viewMenu->addAction(tr("&Performance HUD"));
+    actPerfHud->setCheckable(true);
+    actPerfHud->setChecked(Settings::instance().perfHudVisible());
+    connect(actPerfHud, &QAction::toggled, this, [this](bool on) {
+        Settings::instance().setPerfHudVisible(on);
+        for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+            if (auto* c = m_pane_layout->paneCanvas(i)) c->setPerfHudVisible(on);
+    });
+
+    // ---- Display resampling (FR-RND-10) ----
+    auto* resampleMenu = viewMenu->addMenu(tr("Display &Resampling"));
+    m_resample_group = new QActionGroup(this);
+    const QString resampleNames[3] = {
+        tr("&Bilinear"),
+        tr("Bicubic — &smooth (B-spline)"),
+        tr("Bicubic — s&harp (Catmull-Rom)"),
+    };
+    const int defaultResample = Settings::instance().displayResampling();
+    for (int i = 0; i < 3; ++i) {
+        m_resample_acts[i] = resampleMenu->addAction(resampleNames[i]);
+        m_resample_acts[i]->setCheckable(true);
+        m_resample_acts[i]->setChecked(i == defaultResample);
+        m_resample_group->addAction(m_resample_acts[i]);
+        connect(m_resample_acts[i], &QAction::triggered, this, [this, i] {
+            Settings::instance().setDisplayResampling(i);   // persisted default
+            auto active = m_layer_mgr->activeLayer();
+            if (active && active->type() == LayerType::Raster) {
+                static_cast<RasterLayer*>(active.get())->setDisplayResampling(
+                    static_cast<RasterLayer::DisplayResampling>(i));
+                m_canvas->update();
+            }
+        });
+    }
+
+    // View → Panels (FR-APP-9): populated in buildPanelsMenu() once the docks exist.
+    viewMenu->addSeparator();
+    m_panels_menu = viewMenu->addMenu(tr("&Panels"));
+
+    viewMenu->addSeparator();
+    // Phase 6 (point 13): "New Pane" (no auto-sync; sync is opt-in via the pane gear
+    // menu). Pane removal moved to the per-pane gear menu, so no "Remove Pane" here.
+    auto* actAddPane = viewMenu->addAction(tr("&New Pane"));
+    actAddPane->setShortcut(QKeySequence("Ctrl+Shift+N"));
+    connect(actAddPane, &QAction::triggered, this, &MainWindow::addPane);
+
+    // ---- Pane Layout (FR-PNE-8): Full / Half-H / Half-V / Quarter, radio-exclusive ----
+    auto* layoutMenu = viewMenu->addMenu(tr("Pane &Layout"));
+    auto* layoutGroup = new QActionGroup(this);
+    struct LayoutItem { const char* text; PaneLayoutMode mode; };
+    const LayoutItem layoutItems[] = {
+        { QT_TR_NOOP("&Full"),                PaneLayoutMode::Full    },
+        { QT_TR_NOOP("Half - &Side by Side"), PaneLayoutMode::HalfH   },
+        { QT_TR_NOOP("Half - &Top/Bottom"),   PaneLayoutMode::HalfV   },
+        { QT_TR_NOOP("&Quarter (2x2)"),       PaneLayoutMode::Quarter },
+    };
+    for (const auto& it : layoutItems) {
+        auto* act = layoutMenu->addAction(tr(it.text));
+        act->setCheckable(true);
+        act->setChecked(it.mode == m_pane_layout->mode());
+        layoutGroup->addAction(act);
+        const PaneLayoutMode mode = it.mode;
+        connect(act, &QAction::triggered, this, [this, mode] {
+            m_pane_layout->setMode(mode);
+            // Keep the active pane visible + selected after the regions are rebuilt.
+            m_pane_layout->showPaneInRegion(activePaneId());
+        });
+    }
+
+    // ---- Tools ----
+    auto* toolsMenu = menuBar()->addMenu(tr("&Tools"));
+    auto* actRasterMath = toolsMenu->addAction(tr("&Raster Math…"));
+    actRasterMath->setShortcut(QKeySequence("Ctrl+M"));
+    connect(actRasterMath, &QAction::triggered, this, [this] {
+        const uint64_t activePane = activePaneId();
+        // Each pane's Project CRS is now authoritative per-pane state (Phase 11) — read it
+        // from the canvas (honours user overrides), empty ⇒ geographic. Feeds the Output CRS
+        // list (distinct CRS) and Output pane list; Output CRS defaults to the active pane's.
+        QVector<RasterMathDialog::PaneCrsInfo> panes;
+        for (int p = 0; p < m_pane_layout->paneCount(); ++p) {
+            const uint64_t pid = m_pane_layout->paneId(p);
+            panes.push_back({ pid, m_pane_layout->paneLabel(p), paneProjectCrs(pid) });
+        }
+        // "New Pane" output option: create a pane on demand and return its id.
+        auto createPane = [this]() -> uint64_t {
+            MapCanvas* c = addPane();
+            return m_pane_layout->paneId(m_pane_layout->indexOfCanvas(c));
+        };
+        RasterMathDialog dlg(m_layer_mgr, activePane, panes, createPane, this);
+        dlg.exec();
+        for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+            if (auto* c = m_pane_layout->paneCanvas(i)) c->update();
+    });
+
+    auto* actGdalOps = toolsMenu->addAction(tr("&GDAL Operations (Merge/Warp)…"));
+    connect(actGdalOps, &QAction::triggered, this, [this] {
+        const uint64_t activePane = activePaneId();
+        // Same pane enumeration as Raster Math: feeds each tab's "Output pane" dropdown so the
+        // result lands in a chosen pane (FR-OPS-4). Project CRS read from the canvas (Phase 11).
+        QVector<GdalOpsDialog::PaneInfo> panes;
+        for (int p = 0; p < m_pane_layout->paneCount(); ++p) {
+            const uint64_t pid = m_pane_layout->paneId(p);
+            panes.push_back({ pid, m_pane_layout->paneLabel(p), paneProjectCrs(pid) });
+        }
+        auto createPane = [this]() -> uint64_t {
+            MapCanvas* c = addPane();
+            return m_pane_layout->paneId(m_pane_layout->indexOfCanvas(c));
+        };
+        GdalOpsDialog dlg(m_layer_mgr, activePane, panes, createPane, this);
+        dlg.exec();
+        for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+            if (auto* c = m_pane_layout->paneCanvas(i)) c->update();
+    });
+
+    auto* actSpectral = toolsMenu->addAction(tr("&Spectral Plot (S)"));
+    actSpectral->setShortcut(Qt::Key_S);
+    connect(actSpectral, &QAction::triggered, this, [this] {
+        if (!m_spectral_window) {
+            m_spectral_window = new SpectralPlotWindow(m_layer_mgr, this);
+            connect(m_canvas, &MapCanvas::pixelInspectRequest,
+                    m_spectral_window, &SpectralPlotWindow::addPoint);
+        }
+        m_spectral_window->show(); m_spectral_window->raise();
+    });
+
+    auto* actProfile = toolsMenu->addAction(tr("Scan/Pixel &Profile (P)"));
+    actProfile->setShortcut(Qt::Key_P);
+    connect(actProfile, &QAction::triggered, this, [this] {
+        if (!m_profile_window) {
+            m_profile_window = new ScanPixProfileWindow(m_layer_mgr, this);
+        }
+        m_profile_window->show(); m_profile_window->raise();
+        m_profile_window->compute();
+    });
+
+    // ---- Help ----
+    auto* helpMenu = menuBar()->addMenu(tr("&Help"));
+    auto* actGpu = helpMenu->addAction(tr("&GPU Information…"));
+    connect(actGpu, &QAction::triggered, this, [this] {
+        GpuInfoDialog dlg({m_canvas->glInfo().renderer,
+                           m_canvas->glInfo().vendor,
+                           m_canvas->glInfo().version}, this);
+        dlg.exec();
+    });
+    helpMenu->addSeparator();
+    auto* actAbout = helpMenu->addAction(tr("&About FlashViewer"));
+    connect(actAbout, &QAction::triggered, this, [this] {
+        QMessageBox::about(this, tr("About FlashViewer"),
+            tr("<b>FlashViewer</b> v%1<br/>"
+               "Ultra-fast Satellite Image Rendering Application<br/><br/>"
+               "OpenGL 4.1 Core · Qt %2 · GDAL")
+            .arg(QApplication::applicationVersion())
+            .arg(QString::fromUtf8(qVersion())));
+    });
+
+    auto* actLicenses = helpMenu->addAction(tr("&Licenses…"));
+    connect(actLicenses, &QAction::triggered, this, [this] {
+        AboutLicensesDialog dlg(this);
+        dlg.exec();
+    });
+}
+
+void MainWindow::setupToolBar() {
+    auto* toolbar = addToolBar(tr("Main"));
+    toolbar->setObjectName("MainToolBar");
+    toolbar->setMovable(false);
+
+    auto* actOpen = new QAction(tr("Open"), this);
+    actOpen->setShortcut(QKeySequence::Open);
+    connect(actOpen, &QAction::triggered, this, [this] {
+        QStringList files = QFileDialog::getOpenFileNames(
+            this, tr("Open Raster"), {},
+            QString::fromUtf8(DatasetFactory::openFilter()));
+        if (!files.isEmpty())
+            ErrorReporter::runGuarded("Open", [&] { openFiles(files); });
+    });
+    toolbar->addAction(actOpen);
+
+    toolbar->addSeparator();
+
+    auto* actFitAll = new QAction(tr("Fit All"), this);
+    actFitAll->setToolTip(tr("Fit view to all layers (Space)"));
+    connect(actFitAll, &QAction::triggered, this,
+            [this]{ if (auto* c = activeCanvas()) c->fitToLayers(); });
+    toolbar->addAction(actFitAll);
+
+    auto* actFitAct = new QAction(tr("Fit Active"), this);
+    actFitAct->setToolTip(tr("Fit view to active layer (F)"));
+    connect(actFitAct, &QAction::triggered, this, [this] {
+        auto active = m_layer_mgr->activeLayer();
+        if (!active || active->type() != LayerType::Raster) { m_canvas->fitToLayers(); return; }
+        auto ext = static_cast<RasterLayer*>(active.get())->extent();
+        if (!ext.isValid()) { m_canvas->fitToLayers(); return; }
+        Camera cam = m_canvas->camera();
+        cam.fitToExtent(ext);
+        m_canvas->setCamera(cam);
+        m_canvas->update();
+    });
+    toolbar->addAction(actFitAct);
+
+    toolbar->addSeparator();
+
+    // Quick access to View → New Pane (same slot; the menu action owns the Ctrl+Shift+N
+    // shortcut — don't set it here too, or the two actions form an ambiguous shortcut).
+    auto* actNewPane = new QAction(tr("New Pane"), this);
+    actNewPane->setToolTip(tr("Add a new pane (Ctrl+Shift+N)"));
+    connect(actNewPane, &QAction::triggered, this, &MainWindow::addPane);
+    toolbar->addAction(actNewPane);
+
+    toolbar->addSeparator();
+
+    auto* actInspect = new QAction(tr("Inspect"), this);
+    actInspect->setToolTip(tr("Pixel Inspect mode: left-click=active layer, right-click=all layers (I)"));
+    actInspect->setCheckable(true);
+    actInspect->setShortcut(QKeySequence(Qt::Key_I));
+    // Inspect mode is an app-wide UI mode: apply it to every pane (Phase 6).
+    connect(actInspect, &QAction::toggled, this, [this](bool on) {
+        for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+            if (auto* c = m_pane_layout->paneCanvas(i)) c->setInspectMode(on);
+    });
+    connect(m_canvas, &MapCanvas::inspectModeChanged, actInspect, &QAction::setChecked);
+    toolbar->addAction(actInspect);
+
+    toolbar->addSeparator();
+    auto* actShot = new QAction(tr("Screenshot"), this);
+    actShot->setToolTip(tr("Save screenshot of map canvas with overlays (Ctrl+Shift+S)"));
+    actShot->setShortcut(QKeySequence("Ctrl+Shift+S"));
+    connect(actShot, &QAction::triggered, this, &MainWindow::captureScreenshot);
+    toolbar->addAction(actShot);
+}
+
+void MainWindow::setupDocks() {
+    auto* layerDock = new QDockWidget(tr("Layers"), this);
+    layerDock->setObjectName("LayerDock");
+    layerDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    m_layer_panel = new LayerPanel(layerDock);
+    m_layer_panel->setLayerManager(m_layer_mgr);
+    // Color-code each layer row by its pane's colour (Phase 6.2).
+    m_layer_panel->setPaneColorResolver(
+        [this](uint64_t pid) { return m_pane_layout->paneColorForId(pid); });
+    // "To Pane" submenu source: the current panes (id + label) — Phase 6.3.
+    m_layer_panel->setPaneListResolver([this] {
+        std::vector<std::pair<quint64, QString>> v;
+        for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+            v.emplace_back(m_pane_layout->paneId(i), m_pane_layout->paneLabel(i));
+        return v;
+    });
+    connect(m_layer_panel, &LayerPanel::paneAssignmentRequested,
+            this, [this](int layerIndex, quint64 paneId) {
+                assignLayerToPane(layerIndex, paneId);
+            });
+    layerDock->setWidget(m_layer_panel);
+    addDockWidget(Qt::LeftDockWidgetArea, layerDock);
+
+    auto* propDock = new QDockWidget(tr("Layer Properties"), this);
+    propDock->setObjectName("LayerPropDock");
+    propDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+
+    auto* propWidget = new QWidget(propDock);
+    auto* propLay    = new QVBoxLayout(propWidget);
+    propLay->setContentsMargins(8, 8, 8, 8);   // comfortable margin from the 4 edges
+    propLay->setSpacing(6);
+
+    m_band_sel = new BandSelectorWidget(propWidget);
+    m_cm_sel   = new ColormapSelectorWidget(propWidget);
+    m_nodata_widget = new NoDataWidget(propWidget);
+    m_nodata_widget->setCanvas(m_canvas);
+
+    // The colormap is only relevant in Gray mode, so it lives on the Gray page of the
+    // band stack (which sizes to the current page). In RGB mode it therefore occupies
+    // no space at all — no reserved colormap null space.
+    m_band_sel->setColormapWidget(m_cm_sel);
+
+    propLay->addWidget(m_band_sel);
+    propLay->addWidget(m_nodata_widget);
+    propLay->addStretch();
+
+    // Keep each property element a FIXED height regardless of how much vertical space
+    // the dock spans (half or full of the panel): elements are never stretched or
+    // compressed, the trailing stretch absorbs surplus space, and a QScrollArea scrolls
+    // when the dock is shorter than the content.
+    for (QWidget* w : {static_cast<QWidget*>(m_band_sel),
+                       static_cast<QWidget*>(m_nodata_widget)})
+        w->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+
+    auto* propScroll = new QScrollArea(propDock);
+    propScroll->setWidget(propWidget);
+    propScroll->setWidgetResizable(true);
+    propScroll->setFrameShape(QFrame::NoFrame);
+    propScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    propDock->setWidget(propScroll);
+
+    addDockWidget(Qt::LeftDockWidgetArea, propDock);
+
+    auto* histoDock = new QDockWidget(tr("Histogram"), this);
+    histoDock->setObjectName("HistoDock");
+    histoDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea
+                                | Qt::BottomDockWidgetArea);
+    m_histo_panel = new HistogramPanel(histoDock);
+    m_histo_panel->setLayerManager(m_layer_mgr);
+    histoDock->setWidget(m_histo_panel);
+    addDockWidget(Qt::LeftDockWidgetArea, histoDock);
+
+    tabifyDockWidget(propDock, histoDock);
+
+    auto* logDock = new QDockWidget(tr("Log"), this);
+    logDock->setObjectName("LogDock");
+    logDock->setAllowedAreas(Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea);
+    // Log dock = a small action bar (Export / Clear, FR-APP-10) above the text view.
+    auto* logContainer = new QWidget(logDock);
+    auto* logLay = new QVBoxLayout(logContainer);
+    logLay->setContentsMargins(0, 0, 0, 0);
+    logLay->setSpacing(0);
+    auto* logBar = new QToolBar(logContainer);
+    logBar->setMovable(false);
+    logBar->setIconSize(QSize(16, 16));
+    auto* actExportLog = logBar->addAction(tr("Export Logs…"));
+    actExportLog->setToolTip(tr("Save the log panel contents to a file"));
+    connect(actExportLog, &QAction::triggered, this, &MainWindow::exportLogs);
+    auto* actClearLog = logBar->addAction(tr("Clear"));
+    actClearLog->setToolTip(tr("Clear the log panel (does not affect the log file)"));
+    connect(actClearLog, &QAction::triggered, this, [this] {
+        m_log_entries.clear();
+        if (m_log_widget) m_log_widget->clear();
+    });
+    m_log_widget = new QPlainTextEdit(logContainer);
+    m_log_widget->setReadOnly(true);
+    m_log_widget->setMaximumBlockCount(5000);
+    m_log_widget->setObjectName("LogWidget");
+    logLay->addWidget(logBar);
+    logLay->addWidget(m_log_widget, 1);
+    logDock->setWidget(logContainer);
+    addDockWidget(Qt::BottomDockWidgetArea, logDock);
+    resizeDocks({logDock}, {150}, Qt::Vertical);
+
+    connect(m_layer_mgr, &LayerManager::activeLayerChanged,
+            this, &MainWindow::onActiveLayerChanged);
+    connect(m_layer_mgr, &LayerManager::layerRemoved,
+            this, &MainWindow::onActiveLayerChanged);
+    // Reap managed temp result files AFTER the erase: the layer's shared_ptr has dropped, so
+    // ~RasterDataset has run GDALClose and the file is now deletable (matters on Windows).
+    connect(m_layer_mgr, &LayerManager::layerRemoved, this, [this](int) {
+        for (const QString& path : m_pending_temp_deletions) {
+            if (fvRemoveTempFile(path))
+                FV_INFO("Deleted temp result '{}'", path.toStdString());
+            else
+                FV_WARN("Could not delete temp result '{}'", path.toStdString());
+        }
+        m_pending_temp_deletions.clear();
+    });
+    // Also dispose on ANY graceful exit (Ctrl+Q, window close, QApplication::quit, exec() return):
+    // aboutToQuit fires while MainWindow is still alive, so it can release datasets + reap temps.
+    connect(qApp, &QCoreApplication::aboutToQuit, this, &MainWindow::disposeTempFiles);
+    // Release a removed raster's cached GPU tiles (FR-LYR-4). Fires before the erase, so the
+    // layer is still resolvable; broadcast to every pane (each canvas owns its own TileCache;
+    // the non-owning panes simply find no matching keys).
+    connect(m_layer_mgr, &LayerManager::layerAboutToBeRemoved, this, [this](int index) {
+        auto l = m_layer_mgr->layerAt(index);
+        if (!l || l->type() != LayerType::Raster) return;
+        auto* rl_removed = static_cast<RasterLayer*>(l.get());
+        // Managed temp result (GDAL op / Raster Math "temporary output"): record its file so it
+        // can be deleted once the layer is erased and its GDAL handle is closed (see below). The
+        // layer is still live here, so dataset()->filePath() is resolvable; the file must not be
+        // deleted yet (still open on Windows).
+        if (rl_removed->ownsTempFile() && rl_removed->dataset())
+            m_pending_temp_deletions
+                << QString::fromStdString(rl_removed->dataset()->filePath());
+        const uint64_t id = rl_removed->layerId();
+        for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+            if (auto* c = m_pane_layout->paneCanvas(i)) c->invalidateLayer(id);
+        // If the removed layer is its pane's active/representative layer, the Pixel
+        // Inspector's drop-down for that pane now shows stale data — drop it (matches the
+        // representative-layer pick in inspectFromPane).
+        if (m_attr_insp) {
+            const uint64_t pid = l->paneId();
+            auto active = m_layer_mgr->activeLayer();
+            std::shared_ptr<Layer> rep;
+            if (active && active->type() == LayerType::Raster && active->paneId() == pid)
+                rep = active;
+            else
+                rep = m_layer_mgr->layerAt(topLayerIndexInPane(pid));
+            if (rep.get() == l.get()) m_attr_insp->removePaneGroup(pid);
+        }
+    });
+    // A layer change (e.g. visibility toggle) re-evaluates each pane's legend so the colorbar
+    // appears/disappears with the rendered layer (Phase 6.4.2, point 1).
+    connect(m_layer_mgr, &LayerManager::layerChanged, this, [this](int) { updatePaneLegends(); });
+    // Selecting a layer activates the pane that owns it (keeping THIS layer active), so
+    // Layer-Properties / Histogram edits immediately repaint the pane showing it (Phase 6.3).
+    connect(m_layer_mgr, &LayerManager::activeLayerChanged, this, [this](int idx) {
+        auto l = m_layer_mgr->layerAt(idx);
+        if (!l) return;
+        for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+            if (m_pane_layout->paneId(i) == l->paneId()) { setActivePane(i, false); break; }
+    });
+    // New raster layers inherit the persisted display-resampling default (FR-RND-10).
+    connect(m_layer_mgr, &LayerManager::layerAdded,
+            this, [this](int index) {
+                auto layerPtr = m_layer_mgr->layerAt(index);
+                if (layerPtr && layerPtr->type() == LayerType::Raster)
+                    static_cast<RasterLayer*>(layerPtr.get())->setDisplayResampling(
+                        static_cast<RasterLayer::DisplayResampling>(
+                            Settings::instance().displayResampling()));
+            });
+    connect(m_layer_panel, &LayerPanel::activeLayerChanged,
+            this, [this](int idx) {
+                m_layer_mgr->setActiveLayer(idx);
+            });
+    connect(m_layer_panel, &LayerPanel::fitToLayerRequested,
+            this, [this](int idx) {
+                auto layerPtr = m_layer_mgr->layerAt(idx);
+                if (!layerPtr || layerPtr->type() != LayerType::Raster) return;
+                auto* rl = static_cast<RasterLayer*>(layerPtr.get());
+                Extent ext = rl->extent();
+                if (!ext.isValid()) return;
+                Camera cam = m_canvas->camera();
+                cam.fitToExtent(ext);
+                m_canvas->setCamera(cam);
+                m_canvas->update();
+            });
+    connect(m_layer_panel, &LayerPanel::layerDatasetChanged,
+            this, [this](int idx) {
+                auto layer = m_layer_mgr->layerAt(idx);
+                if (layer && layer->type() == LayerType::Raster)
+                    m_canvas->invalidateLayer(
+                        static_cast<RasterLayer*>(layer.get())->layerId());
+                m_canvas->update();
+                onActiveLayerChanged(idx);
+            });
+
+    connect(m_band_sel, &BandSelectorWidget::bandMappingChanged, this, [this]{
+        if (m_canvas) m_canvas->update();
+        // Refresh the histogram so it follows the new band mapping (1 view in Gray,
+        // 3 R/G/B views in composite) — FR-HST-6.
+        auto* mgr = m_layer_mgr;
+        if (mgr && mgr->activeIndex() >= 0) mgr->notifyLayerChanged(mgr->activeIndex());
+        updatePaneLegends();   // RGB↔Gray toggles the legend's visibility (per pane)
+    });
+    connect(m_cm_sel,   &ColormapSelectorWidget::colormapChanged, this, [this]{
+        if (m_canvas) m_canvas->update();
+        updatePaneLegends();   // repaint the legend of whichever pane shows this layer
+    });
+    connect(m_histo_panel, &HistogramPanel::stretchChanged,
+            this, [this](RasterLayer*, float, float) {
+        if (m_canvas) m_canvas->update();
+        updatePaneLegends();   // legend tick labels follow the stretch range
+    });
+
+    auto* infoDock = new QDockWidget(tr("Layer Info"), this);
+    infoDock->setObjectName("InfoDock");
+    infoDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    m_info_panel = new RasterInfoPanel(infoDock);
+    m_info_panel->setLayerManager(m_layer_mgr);
+    infoDock->setWidget(m_info_panel);
+    addDockWidget(Qt::RightDockWidgetArea, infoDock);
+
+    // GPU Monitor dock (FR-APP-13): live estimated-VRAM sparkline. Default placement
+    // = right column, lower half. It is split BELOW infoDock *now*, while infoDock is
+    // still alone — splitDockWidget only creates a real vertical split against a dock
+    // that is not yet tabbed (once attrDock is tabbed in below, a split would instead
+    // add a new tab). attrDock then joins the TOP group; GPU Monitor stays bottom.
+    auto* gpuDock = new QDockWidget(tr("GPU Monitor"), this);
+    gpuDock->setObjectName("GpuDock");
+    gpuDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea
+                              | Qt::BottomDockWidgetArea);
+    m_gpu_monitor = new GpuMonitorPanel(gpuDock);
+    gpuDock->setWidget(m_gpu_monitor);
+    splitDockWidget(infoDock, gpuDock, Qt::Vertical);   // GPU Monitor below Info
+
+    auto* attrDock = new QDockWidget(tr("Pixel Inspector"), this);
+    attrDock->setObjectName("AttrDock");
+    attrDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea
+                               | Qt::BottomDockWidgetArea);
+    m_attr_insp = new AttributeInspector(attrDock);
+    m_attr_insp->setLayerManager(m_layer_mgr);
+    attrDock->setWidget(m_attr_insp);
+    addDockWidget(Qt::RightDockWidgetArea, attrDock);
+    tabifyDockWidget(infoDock, attrDock);               // Pixel Inspector joins the TOP group
+
+    resizeDocks({infoDock, gpuDock}, {300, 300}, Qt::Vertical);   // ≈ half each
+
+    // Track every dock with its fresh-build placement so View → Panels can re-open a
+    // closed panel at its original location (FR-APP-9). reserve() first: buildPanelsMenu
+    // captures &element into lambdas, so the vector must never reallocate afterward.
+    m_docks.reserve(7);
+    m_docks.append({layerDock, Qt::LeftDockWidgetArea,   nullptr,  nullptr});
+    m_docks.append({propDock,  Qt::LeftDockWidgetArea,   nullptr,  nullptr});
+    m_docks.append({histoDock, Qt::LeftDockWidgetArea,   propDock, nullptr});
+    m_docks.append({infoDock,  Qt::RightDockWidgetArea,  nullptr,  nullptr});
+    m_docks.append({attrDock,  Qt::RightDockWidgetArea,  infoDock, nullptr});
+    m_docks.append({logDock,   Qt::BottomDockWidgetArea, nullptr,  nullptr});
+    m_docks.append({gpuDock,   Qt::RightDockWidgetArea,  nullptr,  nullptr});
+
+    // Default left-column split: the Layers list (top) and the tabbed Layer
+    // Properties / Histogram group (bottom) each take ≈ half the column's height, so
+    // the Histogram tab has room for the three RGB histograms (FR-HST-6). propDock and
+    // histoDock share one cell (tabbed), so sizing propDock sizes the whole group.
+    resizeDocks({layerDock, propDock}, {300, 300}, Qt::Vertical);
+
+    // Pristine default arrangement (taken before restoreLayout() applies saved state)
+    // — used by "Reset Panel Layout".
+    m_default_layout_state = saveState();
+    buildPanelsMenu();
+
+    // The scale bar is now a per-pane overlay owned by each MapCanvas (Phase 6.4.5) — no
+    // single app-wide bar here.
+}
+
+void MainWindow::buildPanelsMenu() {
+    if (!m_panels_menu) return;
+
+    for (DockEntry& e : m_docks) {
+        e.action = m_panels_menu->addAction(e.dock->windowTitle());
+        e.action->setCheckable(true);
+        e.action->setChecked(!e.dock->isHidden());
+        connect(e.action, &QAction::toggled, this, [this, &e](bool on) {
+            if (on) reopenDockToDefault(e);
+            else    e.dock->hide();
+        });
+    }
+
+    m_panels_menu->addSeparator();
+    QAction* actReset = m_panels_menu->addAction(tr("&Reset Panel Layout"));
+    connect(actReset, &QAction::triggered, this, [this] {
+        restoreState(m_default_layout_state);
+    });
+
+    // Refresh checkmarks from the live state each time the menu opens. Use isHidden()
+    // (true only when explicitly closed) — isVisible()/visibilityChanged would falsely
+    // report a dock that is merely the non-front tab as hidden.
+    connect(m_panels_menu, &QMenu::aboutToShow, this, [this] {
+        for (DockEntry& e : m_docks) {
+            if (!e.action) continue;
+            QSignalBlocker block(e.action);
+            e.action->setChecked(!e.dock->isHidden());
+        }
+    });
+}
+
+void MainWindow::reopenDockToDefault(const DockEntry& e) {
+    addDockWidget(e.area, e.dock);                 // relocate to the fresh-build area
+    if (e.tabWith && !e.tabWith->isHidden() && !e.tabWith->isFloating())
+        tabifyDockWidget(e.tabWith, e.dock);       // rejoin its original tab group
+    e.dock->show();
+    e.dock->raise();
+}
+
+void MainWindow::setupStatusBar() {
+    m_coord_label = new QLabel("X: --  Y: --", this);
+    m_coord_label->setMinimumWidth(280);
+    statusBar()->addWidget(m_coord_label);
+    statusBar()->addWidget(new QLabel(" | ", this));
+
+    m_zoom_label = new QLabel("Display Scale: --", this);
+    m_zoom_label->setMinimumWidth(120);
+    statusBar()->addWidget(m_zoom_label);
+    statusBar()->addWidget(new QLabel(" | ", this));
+
+    m_crs_label = new QLabel("CRS: --", this);
+    m_crs_label->setMinimumWidth(150);
+    // Clickable → open the Project-CRS picker for the active pane (Phase 11, FR-CRS-2).
+    m_crs_label->setCursor(Qt::PointingHandCursor);
+    m_crs_label->setToolTip(tr("Project CRS of the active pane. Click to change."));
+    m_crs_label->installEventFilter(this);
+    statusBar()->addWidget(m_crs_label);
+    statusBar()->addWidget(new QLabel(" | ", this));
+
+    m_pixel_label = new QLabel("Col: --  Row: --", this);
+    m_pixel_label->setMinimumWidth(180);
+    statusBar()->addWidget(m_pixel_label);
+
+    statusBar()->showMessage(tr("Ready"), 3000);
+}
+
+void MainWindow::restoreLayout() {
+    // Saved state from a different dock configuration causes
+    // QDockAreaLayoutItem::skip() to crash during traversal.
+    // Guard by checking the layout schema version stored at close time.
+    if (Settings::instance().layoutVersion() != Settings::kCurrentLayoutVersion) {
+        Settings::instance().clearLayoutState();
+        return;
+    }
+    const QByteArray geo   = Settings::instance().loadGeometry();
+    const QByteArray state = Settings::instance().loadState();
+    if (!geo.isEmpty())   restoreGeometry(geo);
+    if (!state.isEmpty() && !restoreState(state))
+        Settings::instance().clearLayoutState();  // corrupt data — discard
+}
+
+// --------------------------------------------------------------------------
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    // Persist the full FR-APP-6 state set: geometry, dock layout (+version),
+    // theme, and OSM tile URL. Theme/OSM-URL are also saved at change-time;
+    // saving them here makes the documented quit behaviour explicit and robust.
+    // (Project CRS is added in Phase 11.)
+    Settings::instance().setLayoutVersion(Settings::kCurrentLayoutVersion);
+    Settings::instance().saveGeometry(saveGeometry());
+    Settings::instance().saveState(saveState());
+    if (auto* app = qobject_cast<Application*>(qApp))
+        Settings::instance().setTheme(app->currentTheme());
+    if (m_canvas && m_canvas->osmRenderer() && m_canvas->osmRenderer()->provider())
+        Settings::instance().setOsmTileUrl(
+            m_canvas->osmRenderer()->provider()->urlTemplate());
+    FV_INFO("MainWindow closing --- state saved (geometry/layout/theme/OSM URL)");
+    disposeTempFiles();   // delete managed temp results (also wired to aboutToQuit for any exit path)
+    event->accept();
+}
+
+void MainWindow::disposeTempFiles() {
+    if (m_temp_disposed) return;
+    m_temp_disposed = true;
+    if (!m_layer_mgr) return;
+
+    // Gather every managed temp path BEFORE closing datasets: any already queued by the
+    // per-removal reaper, plus all currently-loaded temp-owning layers.
+    QStringList paths = m_pending_temp_deletions;
+    m_pending_temp_deletions.clear();
+    for (int i = 0; i < m_layer_mgr->count(); ++i) {
+        auto l = m_layer_mgr->layerAt(i);
+        if (l && l->type() == LayerType::Raster) {
+            auto* rl = static_cast<RasterLayer*>(l.get());
+            if (rl->ownsTempFile() && rl->dataset())
+                paths << QString::fromStdString(rl->dataset()->filePath());
+        }
+    }
+    // Release the datasets (GDALClose) so the files are deletable (esp. on Windows), then reap.
+    m_layer_mgr->clear();
+    int gone = 0;
+    for (const QString& p : paths)
+        if (fvRemoveTempFile(p)) ++gone;
+    if (!paths.isEmpty())
+        FV_INFO("Shutdown: deleted {}/{} managed temp result file(s)", gone, paths.size());
+}
+
+MapCanvas* MainWindow::activeCanvas() const {
+    return m_pane_layout->paneCanvas(m_active_pane_idx);
+}
+
+uint64_t MainWindow::activePaneId() const {
+    return m_pane_layout->paneId(m_active_pane_idx);
+}
+
+QString MainWindow::paneProjectCrs(uint64_t paneId) const {
+    // Authoritative per-pane Project CRS (Phase 11): read the canvas's stored CRS (which
+    // honours a user override), not a fresh bottom-raster scan. Empty ⇒ geographic.
+    for (int p = 0; p < m_pane_layout->paneCount(); ++p)
+        if (m_pane_layout->paneId(p) == paneId)
+            if (auto* c = m_pane_layout->paneCanvas(p))
+                return QString::fromStdString(c->projectCrsWkt());
+    return {};
+}
+
+void MainWindow::setActivePane(int idx, bool selectTopLayer) {
+    if (idx < 0 || idx >= m_pane_layout->paneCount()) return;
+    const bool paneChanged = (idx != m_active_pane_idx);
+    m_active_pane_idx = idx;
+    if (auto* c = m_pane_layout->paneCanvas(idx)) {
+        m_canvas = c;   // menu camera actions & member-capturing lambdas follow the active pane
+        c->emitZoomLevel();   // refresh the m/px readout for the newly-active pane (FR-GIS-3)
+    }
+
+    // Active-pane highlight border (point 10): always reflect the current active pane.
+    for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+        if (auto* c = m_pane_layout->paneCanvas(i)) c->setActive(i == idx);
+
+    // Keep the active pane visible: if it is stacked behind others in its region, bring
+    // it to the front (Phase 6.4). showPaneInRegion does not re-emit activation.
+    m_pane_layout->showPaneInRegion(m_pane_layout->paneId(idx));
+
+    // On switching to a different pane, make that pane's topmost layer the active
+    // layer: highlights it in the Layers panel and drives the property panels
+    // (Band/Colormap/NoData/Histogram/Info). Clicking within the same pane keeps the
+    // user's current layer selection. (Skipped during initial construction, and when the
+    // activation was driven by a layer selection — selectTopLayer=false.)
+    if (paneChanged && selectTopLayer && m_layer_mgr)
+        m_layer_mgr->setActiveLayer(topLayerIndexInPane(m_pane_layout->paneId(idx)));
+
+    updateProjectCrsStatus();   // status-bar CRS follows the active pane (Phase 11)
+}
+
+void MainWindow::wireCanvasSignals(MapCanvas* canvas) {
+    if (!canvas) return;
+
+    // Clicking a pane makes it the active pane.
+    connect(canvas, &MapCanvas::activated, this, [this, canvas] {
+        for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+            if (m_pane_layout->paneCanvas(i) == canvas) { setActivePane(i); break; }
+    });
+
+    // Status bar — whichever pane the cursor is over updates the readouts.
+    connect(canvas, &MapCanvas::cursorGeoPos, this, [this](double x, double y) {
+        m_coord_label->setText(QString("X: %1  Y: %2")
+            .arg(x, 12, 'f', 6).arg(y, 12, 'f', 6));
+    });
+    connect(canvas, &MapCanvas::cursorPixelPos, this, [this](int col, int row) {
+        m_pixel_label->setText(
+            (col < 0 || row < 0)
+            ? "Col: --  Row: --"
+            : QString("Col: %1  Row: %2").arg(col).arg(row));
+    });
+    // FR-GIS-3: metres-per-pixel readout (auto m/px ↔ km/px). The signal now carries metres/px
+    // (geographic scales converted via the L-1 approximation inside MapCanvas).
+    connect(canvas, &MapCanvas::zoomLevelChanged, this, [this](double mpp) {
+        m_zoom_label->setText(mpp >= 1000.0
+            ? QString("Display Scale: %1 km/px").arg(mpp / 1000.0, 0, 'g', 4)
+            : QString("Display Scale: %1 m/px").arg(mpp, 0, 'g', 4));
+    });
+
+    // Inspect mode (Phase 6.6): left-click → the clicked pane's active/representative layer,
+    // right-click → all its visible rasters; if the clicked pane is synced, aggregate across
+    // its whole sync group (one row-group per pane).
+    connect(canvas, &MapCanvas::pixelInspectRequest, this, [this, canvas](double x, double y) {
+        inspectFromPane(canvas, x, y, /*allLayers=*/false);
+    });
+    connect(canvas, &MapCanvas::pixelInspectAllRequest, this, [this, canvas](double x, double y) {
+        inspectFromPane(canvas, x, y, /*allLayers=*/true);
+    });
+
+    // Pane gear-menu actions (Phase 6.1 / 6.2).
+    connect(canvas, &MapCanvas::paneCloseRequested,  this, [this, canvas]{ closePane(canvas);  });
+    connect(canvas, &MapCanvas::paneRenameRequested, this, [this, canvas]{ renamePane(canvas); });
+    connect(canvas, &MapCanvas::paneColorRequested,  this, [this, canvas]{ colorPane(canvas);  });
+
+    // Sync With (Phase 6.5): the gear submenu lists the other panes (resolver), toggling one
+    // makes this canvas the master; Unsync dissolves the group.
+    canvas->setSyncInfoResolver([this, canvas]() {
+        std::vector<PaneSyncEntry> out;
+        const uint64_t mId = canvas->paneId();
+        const bool mSynced = m_pane_layout->paneSynced(mId);
+        for (int i = 0; i < m_pane_layout->paneCount(); ++i) {
+            const uint64_t id = m_pane_layout->paneId(i);
+            if (id == mId) continue;
+            out.push_back(PaneSyncEntry{ id, m_pane_layout->paneLabel(i),
+                                         mSynced && m_pane_layout->paneSynced(id) });
+        }
+        return out;
+    });
+    connect(canvas, &MapCanvas::paneSyncToggleRequested, this, [this, canvas](uint64_t otherId) {
+        m_pane_layout->syncToggle(canvas->paneId(), otherId);
+    });
+    connect(canvas, &MapCanvas::paneUnsyncRequested, this, [this] { m_pane_layout->clearSync(); });
+
+    // Ghost cursor (Phase 6.5 / 6.5.1): mirror this pane's cursor onto EVERY synced pane
+    // (including the source) so all ghost markers sit at the same geographic point and move
+    // together. In the source pane the marker coincides with the live cursor.
+    connect(canvas, &MapCanvas::cursorGeoPos, this, [this, canvas](double x, double y) {
+        const uint64_t srcId = canvas->paneId();
+        if (!m_pane_layout->paneSynced(srcId)) return;
+        for (int i = 0; i < m_pane_layout->paneCount(); ++i) {
+            const uint64_t id = m_pane_layout->paneId(i);
+            if (!m_pane_layout->paneSynced(id)) continue;
+            if (auto* c = m_pane_layout->paneCanvas(i)) c->setGhostCursor(x, y, true);
+        }
+    });
+
+    // A layer dragged from the Layers panel onto this pane → reassign it here (Phase 6.3).
+    connect(canvas, &MapCanvas::layerDropped, this, [this, canvas](int layerIndex) {
+        assignLayerToPane(layerIndex, canvas->paneId());
+    });
+
+    // Project CRS (Phase 11): keep the status-bar CRS readout in sync when this pane's
+    // Project CRS changes, and open the CRS picker from the pane gear-menu entry.
+    connect(canvas, &MapCanvas::projectCrsChanged, this, [this, canvas](const QString&) {
+        if (canvas == m_canvas) updateProjectCrsStatus();
+    });
+    connect(canvas, &MapCanvas::paneCrsRequested, this, [this, canvas] {
+        openProjectCrsPicker(canvas);
+    });
+    // On-the-fly reprojection notice → non-modal banner (Phase 11, FR-CRS-6): amber for the
+    // informational notice, red/error styling when a layer was omitted (failed).
+    connect(canvas, &MapCanvas::reprojectionNotice, this, [this](const QString& msg, bool failed) {
+        showErrorBanner(failed ? 4 : 3, msg);
+    });
+}
+
+void MainWindow::assignLayerToPane(int layerIndex, uint64_t paneId) {
+    auto l = m_layer_mgr->layerAt(layerIndex);
+    if (!l || l->paneId() == paneId) return;
+
+    // Was the target pane empty? If so, fit it to the newly-assigned layer.
+    int targetCount = 0;
+    for (int i = 0; i < m_layer_mgr->count(); ++i) {
+        auto x = m_layer_mgr->layerAt(i);
+        if (x && x->paneId() == paneId) ++targetCount;
+    }
+
+    l->setPaneId(paneId);
+
+    MapCanvas* target = nullptr;
+    for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+        if (m_pane_layout->paneId(i) == paneId) { target = m_pane_layout->paneCanvas(i); break; }
+    if (target && targetCount == 0) target->fitToLayers();
+
+    // Layer leaves its source pane and appears on the target — refresh every canvas, the
+    // per-pane legends, and the Layers-panel colour-coding.
+    for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+        if (auto* c = m_pane_layout->paneCanvas(i)) c->update();
+    updatePaneLegends();
+    if (m_layer_panel) m_layer_panel->refreshPaneColors();
+    FV_INFO("Layer {} reassigned to pane id {}", layerIndex, paneId);
+}
+
+MapCanvas* MainWindow::addPane() {
+    auto* canvas = m_pane_layout->addPane(false);   // not auto-synced (Phase 6, point 13)
+    wireCanvasSignals(canvas);
+    // Inherit the current basemap + inspect mode + Performance HUD so the new pane
+    // matches the others.
+    if (m_canvas) {
+        canvas->osmRenderer()->setEnabled(m_canvas->osmRenderer()->isEnabled());
+        canvas->setInspectMode(m_canvas->inspectMode());
+        canvas->setPerfHudVisible(m_canvas->perfHudVisible());   // FR-APP-14
+    }
+    canvas->osmRenderer()->provider()->setUrlTemplate(Settings::instance().osmTileUrl());
+    if (auto* app = qobject_cast<Application*>(qApp))
+        canvas->setDarkBackground(app->currentTheme() == Theme::Dark);
+    const int newIdx = m_pane_layout->paneCount() - 1;
+    canvas->setPaneLabel(m_pane_layout->paneLabel(newIdx));
+    // Theme-aware, distinct colour for the new pane. Pass the pane index (not idx-1) so
+    // palette[0] isn't a near-duplicate of the default pane's accent blue. FR-PNE-6/7.
+    const bool dark = qobject_cast<Application*>(qApp)
+                          ? qobject_cast<Application*>(qApp)->currentTheme() == Theme::Dark : true;
+    const QColor paneCol = fvPaneColor(newIdx, dark);
+    m_pane_layout->setPaneColor(newIdx, paneCol);
+    canvas->setPaneColor(paneCol);   // border + ID label
+    if (m_layer_panel) m_layer_panel->refreshPaneColors();
+    setActivePane(newIdx);   // newly-opened layers land here
+    FV_INFO("Added pane {} (id {})", newIdx, activePaneId());
+    return canvas;
+}
+
+void MainWindow::closePane(MapCanvas* canvas) {
+    const int idx = m_pane_layout->indexOfCanvas(canvas);
+    if (idx < 0) return;
+    const uint64_t pid = m_pane_layout->paneId(idx);
+
+    if (m_pane_layout->paneCount() <= 1) {
+        // Can't drop below one pane (point 12): clear this pane's layers instead so it
+        // becomes an empty default pane (removal high→low so indices stay valid).
+        for (int i = m_layer_mgr->count() - 1; i >= 0; --i) {
+            auto l = m_layer_mgr->layerAt(i);
+            if (l && l->paneId() == pid) m_layer_mgr->removeLayer(i);
+        }
+        return;
+    }
+
+    // Reassign this pane's layers to a surviving pane (no data loss), then remove the pane.
+    // Prefer another pane in the SAME region (so the layers stay in the stack the user is
+    // viewing); else fall back to the lowest-index remaining pane (Phase 6.4.2, point 4).
+    const int region = m_pane_layout->regionOfPane(idx);
+    int targetIdx = -1;
+    for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+        if (i != idx && m_pane_layout->regionOfPane(i) == region) { targetIdx = i; break; }
+    if (targetIdx < 0) targetIdx = (idx == 0) ? 1 : 0;
+    const uint64_t targetPid = m_pane_layout->paneId(targetIdx);
+
+    // Was the target empty before the move? If so its camera was never fit — fit it after,
+    // so the reassigned layers are actually visible (mirrors assignLayerToPane).
+    int targetCountBefore = 0;
+    for (int i = 0; i < m_layer_mgr->count(); ++i) {
+        auto l = m_layer_mgr->layerAt(i);
+        if (l && l->paneId() == targetPid) ++targetCountBefore;
+    }
+    for (int i = 0; i < m_layer_mgr->count(); ++i) {
+        auto l = m_layer_mgr->layerAt(i);
+        if (l && l->paneId() == pid) l->setPaneId(targetPid);
+    }
+    m_pane_layout->removePane(idx);
+
+    // Re-establish the active pane (indices shifted); force a refresh by clearing first.
+    const int newActive = std::min(m_active_pane_idx, m_pane_layout->paneCount() - 1);
+    m_active_pane_idx = -1;
+    setActivePane(std::max(0, newActive));
+
+    // Fit the target canvas to the moved layers if it had none before (else they'd render
+    // off-screen and a re-drag onto the same pane would be a no-op).
+    if (targetCountBefore == 0) {
+        for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+            if (m_pane_layout->paneId(i) == targetPid) {
+                if (auto* tc = m_pane_layout->paneCanvas(i)) tc->fitToLayers();
+                break;
+            }
+    }
+
+    for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+        if (auto* c = m_pane_layout->paneCanvas(i)) c->update();
+    updatePaneLegends();
+    if (m_layer_panel) m_layer_panel->refreshPaneColors();   // reassigned layers recolour
+}
+
+void MainWindow::renamePane(MapCanvas* canvas) {
+    const int idx = m_pane_layout->indexOfCanvas(canvas);
+    if (idx < 0) return;
+    bool ok = false;
+    const QString name = QInputDialog::getText(
+        this, tr("Edit Pane ID"), tr("Pane name:"), QLineEdit::Normal,
+        m_pane_layout->paneLabel(idx), &ok);
+    if (!ok || name.isEmpty()) return;
+    m_pane_layout->setPaneLabel(idx, name);
+    canvas->setPaneLabel(name);
+}
+
+void MainWindow::colorPane(MapCanvas* canvas) {
+    const int idx = m_pane_layout->indexOfCanvas(canvas);
+    if (idx < 0) return;
+    QColor current = m_pane_layout->paneColor(idx);
+    if (!current.isValid()) current = Qt::white;
+    // Reuses the no-data picker pattern (FR-PNE-6). The chosen base colour is applied at
+    // ~50 % alpha behind the layer rows and full strength on the Vis/opacity widgets.
+    QColor chosen = QColorDialog::getColor(current, this, tr("Pane Color"));
+    if (!chosen.isValid()) return;
+    m_pane_layout->setPaneColor(idx, chosen);
+    canvas->setPaneColor(chosen);   // border + ID label follow the new colour
+    if (m_layer_panel) m_layer_panel->refreshPaneColors();
+}
+
+void MainWindow::removeActivePane() {
+    if (m_pane_layout->paneCount() <= 1) return;
+    m_pane_layout->removePane(m_active_pane_idx);
+    setActivePane(std::max(0, m_active_pane_idx - 1));
+}
+
+void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
+    if (event->mimeData()->hasUrls()) event->acceptProposedAction();
+}
+
+void MainWindow::dropEvent(QDropEvent* event) {
+    QStringList paths;
+    for (const auto& url : event->mimeData()->urls())
+        if (url.isLocalFile()) paths << url.toLocalFile();
+    if (!paths.isEmpty())
+        ErrorReporter::runGuarded("Drop-open", [&] { openFiles(paths); });
+}
+
+void MainWindow::onThemeChanged(Theme t) {
+    // Every pane's canvas must follow the theme, not just the active one (Phase 6).
+    for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+        if (auto* c = m_pane_layout->paneCanvas(i))
+            c->setDarkBackground(t == Theme::Dark);
+    // The default pane (0) tracks the theme accent blue (Phase 6.2.1).
+    if (m_pane_layout->paneCount() > 0) {
+        const QColor accent = qApp->palette().highlight().color();
+        m_pane_layout->setPaneColor(0, accent);
+        if (auto* c0 = m_pane_layout->paneCanvas(0)) c0->setPaneColor(accent);
+        if (m_layer_panel) m_layer_panel->refreshPaneColors();
+    }
+    if (m_log_widget) {
+        m_log_widget->clear();
+        for (const auto& e : m_log_entries)
+            renderLogEntry(e.level, e.text);
+        m_log_widget->verticalScrollBar()->setValue(
+            m_log_widget->verticalScrollBar()->maximum());
+    }
+    // Keep an on-screen notification banner theme-compliant across a live theme toggle.
+    if (m_error_banner && m_error_banner->isVisible())
+        applyBannerStyle(m_banner_level);
+}
+
+int MainWindow::topLayerIndexInPane(uint64_t paneId) const {
+    if (!m_layer_mgr) return -1;
+    // List order is top→bottom, so the lowest index in the pane is its topmost layer.
+    for (int i = 0; i < m_layer_mgr->count(); ++i) {
+        auto l = m_layer_mgr->layerAt(i);
+        if (l && l->paneId() == paneId) return i;
+    }
+    return -1;
+}
+
+void MainWindow::inspectFromPane(MapCanvas* clicked, double gx, double gy, bool allLayers) {
+    if (!clicked || !m_layer_mgr || !m_pane_layout) return;
+    const int clickedIdx = m_pane_layout->indexOfCanvas(clicked);
+    if (clickedIdx < 0) return;
+    const uint64_t clickedId = m_pane_layout->paneId(clickedIdx);
+
+    // Target panes: the whole sync group when the clicked pane is synced, else just it
+    // (Phase 6.6). Synced panes share a coordinate space, so one geo point samples them all.
+    std::vector<uint64_t> panes;
+    if (m_pane_layout->paneSynced(clickedId)) {
+        for (int i = 0; i < m_pane_layout->paneCount(); ++i) {
+            const uint64_t id = m_pane_layout->paneId(i);
+            if (m_pane_layout->paneSynced(id)) panes.push_back(id);
+        }
+    } else {
+        panes.push_back(clickedId);
+    }
+    auto active = m_layer_mgr->activeLayer();
+    QVector<InspectPaneGroup> groups;
+    for (uint64_t pid : panes) {
+        InspectPaneGroup grp;
+        grp.paneId = pid;
+        grp.paneColor = m_pane_layout->paneColorForId(pid);
+        for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+            if (m_pane_layout->paneId(i) == pid) { grp.paneLabel = m_pane_layout->paneLabel(i); break; }
+
+        // A hidden layer's pixel value is never shown in the inspector (gates both the
+        // left-click representative and the right-click all-layers paths).
+        auto addLayer = [&](const std::shared_ptr<Layer>& l) {
+            if (!l || l->type() != LayerType::Raster || !l->visible()) return;
+            grp.layers.push_back(InspectLayerEntry{ l->name(), static_cast<RasterLayer*>(l.get()) });
+        };
+
+        if (allLayers) {
+            for (int i = 0; i < m_layer_mgr->count(); ++i) {
+                auto l = m_layer_mgr->layerAt(i);
+                if (l && l->paneId() == pid && l->visible() && l->type() == LayerType::Raster)
+                    addLayer(l);
+            }
+        } else {
+            // The pane's representative layer: the global active layer if it lives here, else
+            // the pane's topmost layer (mirrors updatePaneLegends).
+            std::shared_ptr<Layer> rep;
+            if (active && active->type() == LayerType::Raster && active->paneId() == pid)
+                rep = active;
+            else
+                rep = m_layer_mgr->layerAt(topLayerIndexInPane(pid));
+            addLayer(rep);
+        }
+        groups.push_back(std::move(grp));
+    }
+
+    // (gx,gy) are in the clicked pane's Project CRS; pass it so the inspector samples each
+    // layer's SOURCE pixel by transforming into the layer's source CRS (Phase 11, FR-CRS-4).
+    m_attr_insp->inspectGroups(gx, gy, clicked ? clicked->projectCrsWkt() : std::string(), groups);
+
+    // Mirror the red inspect-highlight square onto every target pane at the shared geo point
+    // (Phase 6.8.3): the clicked pane already self-highlights in MapCanvas::mousePressEvent;
+    // this draws it on the synced siblings too (idempotent for the clicked pane). Out-of-bounds
+    // points clear that pane's overlay.
+    for (uint64_t pid : panes)
+        for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+            if (m_pane_layout->paneId(i) == pid) {
+                if (auto* c = m_pane_layout->paneCanvas(i)) c->updateHighlightForGeo(gx, gy);
+                break;
+            }
+}
+
+void MainWindow::updatePaneLegends() {
+    if (!m_layer_mgr || !m_pane_layout) return;
+    auto active = m_layer_mgr->activeLayer();
+    for (int i = 0; i < m_pane_layout->paneCount(); ++i) {
+        auto* c = m_pane_layout->paneCanvas(i);
+        if (!c) continue;
+        const uint64_t pid = m_pane_layout->paneId(i);
+        std::shared_ptr<Layer> chosen;
+        // Prefer the active layer if it belongs to this pane; else the pane's topmost.
+        if (active && active->type() == LayerType::Raster && active->paneId() == pid)
+            chosen = active;
+        else
+            chosen = m_layer_mgr->layerAt(topLayerIndexInPane(pid));
+        RasterLayer* rl = (chosen && chosen->type() == LayerType::Raster)
+                              ? static_cast<RasterLayer*>(chosen.get()) : nullptr;
+        c->colormapLegend()->setLayer(rl);   // nullptr hides the legend (empty pane)
+    }
+}
+
+void MainWindow::onActiveLayerChanged(int index) {
+    if (!m_layer_mgr) return;
+    auto layerPtr = m_layer_mgr->layerAt(index);
+    RasterLayer* rl = nullptr;
+    if (layerPtr && layerPtr->type() == LayerType::Raster)
+        rl = static_cast<RasterLayer*>(layerPtr.get());
+    refreshLayerProperties(rl);
+    updatePaneLegends();
+
+    // Reflect the active layer's display-resampling mode in the View menu radios
+    // (fall back to the persisted default when there is no active raster layer).
+    if (m_resample_group) {
+        int mode = rl ? static_cast<int>(rl->displayResampling())
+                      : Settings::instance().displayResampling();
+        if (mode >= 0 && mode < 3 && m_resample_acts[mode]) {
+            QSignalBlocker block(m_resample_group);
+            m_resample_acts[mode]->setChecked(true);
+        }
+    }
+}
+
+void MainWindow::refreshLayerProperties(RasterLayer* layer) {
+    m_band_sel->setLayer(layer);
+    m_cm_sel->setLayer(layer);
+    // NOTE: the colormap legend is NOT set here — it is per-pane and bound to each
+    // pane's own layer by updatePaneLegends() (a pane's legend must not follow the
+    // globally-active layer, which may live in a different pane).
+    m_nodata_widget->setLayer(layer);
+
+    // The status-bar CRS readout shows the active pane's PROJECT CRS (Phase 11, FR-GIS-4),
+    // not the active layer's source CRS — layers may be reprojected on the fly into it.
+    updateProjectCrsStatus();
+}
+
+void MainWindow::updateProjectCrsStatus() {
+    if (!m_crs_label) return;
+    MapCanvas* c = (m_active_pane_idx >= 0 && m_active_pane_idx < m_pane_layout->paneCount())
+                       ? m_pane_layout->paneCanvas(m_active_pane_idx) : nullptr;
+    if (!c) { m_crs_label->setText("CRS: --"); return; }
+
+    const std::string paneWkt = c->projectCrsWkt();
+    // Count this pane's raster layers being reprojected on the fly (source CRS ≠ pane CRS).
+    const uint64_t pid = c->paneId();
+    int reproj = 0;
+    for (int i = 0; i < m_layer_mgr->count(); ++i) {
+        auto l = m_layer_mgr->layerAt(i);
+        if (l && l->paneId() == pid && l->type() == LayerType::Raster) {
+            auto* rl = static_cast<RasterLayer*>(l.get());
+            if (rl->dataset() && !fvSameCrsWkt(rl->dataset()->crsWkt(), paneWkt))
+                ++reproj;
+        }
+    }
+    QString txt = "CRS: " + fvCrsShortName(paneWkt);
+    if (reproj > 0) txt += QString("  ↻%1").arg(reproj);   // ↻N reprojected
+    m_crs_label->setText(txt);
+    m_crs_label->setToolTip(
+        reproj > 0
+        ? tr("Project CRS of the active pane — %1 layer(s) reprojected on the fly. "
+             "Click to change.").arg(reproj)
+        : tr("Project CRS of the active pane. Click to change."));
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == m_crs_label && event->type() == QEvent::MouseButtonRelease) {
+        MapCanvas* c = (m_active_pane_idx >= 0 && m_active_pane_idx < m_pane_layout->paneCount())
+                           ? m_pane_layout->paneCanvas(m_active_pane_idx) : nullptr;
+        if (c) openProjectCrsPicker(c);
+        return true;
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::openProjectCrsPicker(MapCanvas* canvas) {
+    if (!canvas) return;
+    CrsPickerDialog dlg(canvas->projectCrsWkt(), this);
+    if (dlg.exec() != QDialog::Accepted) return;
+    if (dlg.useLayerCrs())
+        canvas->clearProjectCrsOverride();                       // revert to derived default
+    else
+        canvas->setProjectCrsWkt(dlg.resultWkt(), /*userInitiated=*/true);
+    updateProjectCrsStatus();
+}
+
+void MainWindow::renderLogEntry(int level, const QString& text) {
+    const int clamped = std::clamp(level, 0, 6);
+    auto* app = qobject_cast<Application*>(qApp);
+    bool dark = !app || app->currentTheme() == Theme::Dark;
+    const char* color = (dark ? kLevelColorsDark : kLevelColorsLight)[clamped];
+    for (const QString& line : text.split('\n'))
+        m_log_widget->appendHtml(
+            QString("<span style=\"color:%1;\">%2</span>")
+            .arg(color, line.toHtmlEscaped()));
+}
+
+void MainWindow::appendLog(int level, const QString& text) {
+    if (!m_log_widget) return;
+    m_log_entries.append({level, text});
+    if (m_log_entries.size() > 5000) m_log_entries.removeFirst();
+    renderLogEntry(level, text);
+    m_log_widget->verticalScrollBar()->setValue(
+        m_log_widget->verticalScrollBar()->maximum());
+}
+
+void MainWindow::exportLogs() {
+    // FR-APP-10: write the in-panel log buffer to a user-chosen file. Each entry's
+    // text already carries the "[time] [level] message" prefix.
+    QString dir = Settings::instance().logExportDir();
+    if (dir.isEmpty()) dir = QDir::homePath();
+    const QString suggested = dir + "/flashviewer-log.txt";
+    const QString path = QFileDialog::getSaveFileName(
+        this, tr("Export Logs"), suggested,
+        tr("Text (*.txt *.log);;All files (*)"));
+    if (path.isEmpty()) return;
+
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+        QMessageBox::warning(this, tr("Export Failed"),
+            tr("Could not write log to:\n%1").arg(path));
+        return;
+    }
+    QTextStream out(&f);
+    for (const LogEntry& e : m_log_entries) out << e.text << '\n';
+    f.close();
+
+    Settings::instance().setLogExportDir(QFileInfo(path).absolutePath());
+    statusBar()->showMessage(tr("Exported %1 log entries to %2")
+                                 .arg(m_log_entries.size()).arg(path), 5000);
+    FV_INFO("Exported {} log entries to '{}'",
+            m_log_entries.size(), path.toStdString());
+}
+
+void MainWindow::applyBannerStyle(int level) {
+    if (!m_error_banner) return;
+    auto* app = qobject_cast<Application*>(qApp);
+    const bool dark = !app || app->currentTheme() == Theme::Dark;
+    // Theme-compliant, contrast-safe background+foreground PAIRS per level (Primer subtle-bg
+    // + matching fg, ≥ 4.5:1). Both vary by level so red error text never lands on the amber
+    // warn background. warn=3, error=4, critical≥5.
+    const char* bg;
+    const char* fg;
+    if (level >= 5) {            // critical → danger-subtle bg + strong danger fg
+        bg = dark ? "#2b1a19" : "#ffebe9";
+        fg = dark ? "#ff7b72" : "#a40e26";
+    } else if (level == 4) {     // error → danger-subtle
+        bg = dark ? "#2b1a19" : "#ffebe9";
+        fg = dark ? "#f85149" : "#cf222e";
+    } else {                     // warn → attention-subtle (amber)
+        bg = dark ? "#272115" : "#fff8c5";
+        fg = dark ? "#d29922" : "#9a6700";
+    }
+    m_error_banner->setStyleSheet(
+        QString("#ErrorBanner{background:%1;border-left:3px solid %2;}").arg(bg, fg));
+    m_error_banner_label->setTextColor(QColor(fg));
+}
+
+void MainWindow::showErrorBanner(int level, const QString& text) {
+    if (!m_error_banner || level < 3) return;   // info/debug → log only, no banner
+    m_banner_level = level;
+    applyBannerStyle(level);
+    m_error_banner_label->setText(text);
+    m_error_banner->show();
+    m_banner_timer->start(8000);   // auto-hide after 8 s
+}
+
+QPixmap MainWindow::grabLayoutComposite() {
+    // Composite each region's FRONT pane at its on-screen geometry; empty regions and the
+    // pill strips / splitter gaps are filled with the theme canvas background (matching the
+    // single-pane grab), not transparent (Phase 7 follow-up). grabForExport() omits each pane's
+    // chrome + border and keeps its visible map furniture (legend/scale bar/highlight).
+    const bool dark = qobject_cast<Application*>(qApp)
+                          ? qobject_cast<Application*>(qApp)->currentTheme() == Theme::Dark : true;
+    const QColor bg = dark ? QColor(0x0d, 0x11, 0x17)   // GitHub Dark  #0d1117
+                           : QColor(0xf6, 0xf8, 0xfa);   // GitHub Light #f6f8fa
+    const qreal dpr = m_pane_layout->devicePixelRatioF();
+    QPixmap composite(QSize(qRound(m_pane_layout->width()  * dpr),
+                            qRound(m_pane_layout->height() * dpr)));
+    composite.setDevicePixelRatio(dpr);
+    composite.fill(bg);
+    QPainter p(&composite);
+    for (int r = 0; r < m_pane_layout->regionCount(); ++r)
+        if (auto* c = m_pane_layout->frontCanvasInRegion(r))
+            p.drawPixmap(c->mapTo(m_pane_layout, QPoint(0, 0)), c->grabForExport());
+    p.end();
+    return composite;
+}
+
+void MainWindow::captureScreenshot() {
+    QPixmap px;
+    // Multi-pane: let the user choose what to capture (Phase 7 follow-up). A single pane skips
+    // the prompt (both modes would produce the same image).
+    if (m_pane_layout->paneCount() > 1) {
+        const QStringList modes{ tr("Active pane"), tr("Entire pane layout") };
+        bool ok = false;
+        const QString mode = QInputDialog::getItem(
+            this, tr("Screenshot"), tr("Capture:"), modes, 0, /*editable=*/false, &ok);
+        if (!ok) return;
+        px = (mode == modes[1]) ? grabLayoutComposite() : m_canvas->grabForExport();
+    } else {
+        px = m_canvas->grabForExport();       // omit pane chrome (ID+gear) and border
+    }
+
+    QString path = QFileDialog::getSaveFileName(
+        this, tr("Save Screenshot"),
+        QDir::homePath() + "/screenshot.png",
+        tr("PNG (*.png);;JPEG (*.jpg);;TIFF (*.tif *.tiff)"));
+    if (path.isEmpty()) return;
+    if (!px.save(path))
+        QMessageBox::warning(this, tr("Save Failed"),
+            tr("Could not save screenshot to:\n%1").arg(path));
+}

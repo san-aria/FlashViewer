@@ -1,0 +1,48 @@
+name: flashviewer-linux
+channels:
+  - conda-forge
+dependencies:
+  - gdal>=3.8
+  # conda-forge ships GDAL format drivers as separate plugins; libgdal-core alone
+  # has only GTiff/VRT. These add the NetCDF and HDF5 drivers (FR-IO-4).
+  - libgdal-netcdf
+  - libgdal-hdf5
+  - spdlog
+  - nlohmann_json
+  - glm
+  - muparser
+  - catch2>=3
+  - cmake>=3.25
+  - ninja
+  # Self-contained: Qt6 (incl. Charts + Svg) comes from conda-forge too — no
+  # system packages and no aqtinstall needed on Linux.
+  - qt6-main
+  - qt6-charts
+  - qt6-svg
+
+# ===========================================================================
+# Linux conda build — read before you build/run
+# ===========================================================================
+# This is the OPTIONAL conda path. The default Linux build uses system packages
+# (apt/dnf) — see INSTALL.md. Activate this env, then configure with:
+#   conda activate flashviewer-linux
+#   cmake --preset linux-release -DCMAKE_PREFIX_PATH="$CONDA_PREFIX"
+#
+# --- Pitfall 1: OpenGL / mesa --------------------------------------------------
+# FlashViewer requires the SYSTEM GPU's OpenGL 4.1 Core driver. conda may pull
+# `mesa` / `libglvnd` as a Qt dependency, and its libGL.so can SHADOW the system
+# driver on the loader path — yielding software (llvmpipe) rendering or an
+# "OpenGL 4.1 not available" error at launch. Do NOT add `mesa` to this file.
+# If it gets pulled in transitively and you hit GL problems, ensure the system
+# libGL is found first (keep /usr/lib*/libGL ahead of $CONDA_PREFIX/lib on
+# LD_LIBRARY_PATH, or relocate/remove conda's libGL).
+#
+# --- Pitfall 2: Qt xcb platform plugin ----------------------------------------
+# If launch fails with "could not load the Qt platform plugin xcb", the conda Qt
+# needs system xcb/xkb runtime libs present. Install (example, Debian/Ubuntu):
+#   sudo apt-get install -y libxcb-cursor0 libxkbcommon-x11-0 libgl1 libegl1
+# or point Qt at the conda plugins:
+#   export QT_QPA_PLATFORM_PLUGIN_PATH="$CONDA_PREFIX/plugins/platforms"
+# For headless machines/CI use the offscreen platform:
+#   export QT_QPA_PLATFORM=offscreen
+# ===========================================================================

@@ -1,0 +1,646 @@
+<!doctype html>
+<!-- FlashViewer Manual Smoke Tests — sole source of truth (the former MANUAL_SMOKE_TESTS.md was removed).
+     Update on any incremental change, together with SRS/SDD/TEST_SPEC/REVAMP_PLAN.
+     Tracks SRS v2.63 / SDD v1.58 (Phase 14 conformance sync; Phase 13 deferred to 0.2.0). Self-contained: no external requests; state in localStorage. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FlashViewer — Manual Smoke Tests</title>
+<script>
+  // Apply saved/system theme before paint (no flash).
+  (function () {
+    try {
+      var s = JSON.parse(localStorage.getItem('fv-smoke-v1') || '{}');
+      var t = s.theme || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
+  })();
+</script>
+<style>
+  :root{
+    --bg:#ffffff; --fg:#1f2328; --muted:#656d76; --card:#f6f8fa; --card2:#ffffff;
+    --border:#d0d7de; --accent:#0969da; --accent-fg:#ffffff;
+    --pass:#1a7f37; --pass-bg:#dafbe1; --fail:#cf222e; --fail-bg:#ffebe9;
+    --na:#6e7781; --na-bg:#eaeef2; --untested:#d0d7de;
+    --chip:#eaeef2; --chip-fg:#57606a; --reg:#9a6700; --reg-bg:#fff8c5;
+    --shadow:0 1px 3px rgba(31,35,40,.12);
+  }
+  :root[data-theme="dark"]{
+    --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --card:#161b22; --card2:#0d1117;
+    --border:#30363d; --accent:#2f81f7; --accent-fg:#ffffff;
+    --pass:#3fb950; --pass-bg:#12261a; --fail:#f85149; --fail-bg:#2b1a19;
+    --na:#8b949e; --na-bg:#21262d; --untested:#30363d;
+    --chip:#21262d; --chip-fg:#8b949e; --reg:#d29922; --reg-bg:#272115;
+    --shadow:0 1px 3px rgba(1,4,9,.6);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --card:#161b22; --card2:#0d1117;
+      --border:#30363d; --accent:#2f81f7; --accent-fg:#ffffff;
+      --pass:#3fb950; --pass-bg:#12261a; --fail:#f85149; --fail-bg:#2b1a19;
+      --na:#8b949e; --na-bg:#21262d; --untested:#30363d;
+      --chip:#21262d; --chip-fg:#8b949e; --reg:#d29922; --reg-bg:#272115;
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding-bottom:4rem}
+  code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;background:var(--card);border:1px solid var(--border);border-radius:4px;padding:.05em .35em;font-size:.86em}
+  a{color:var(--accent)}
+  h1{font-size:1.5rem;margin:.2rem 0}
+  h2{font-size:1.15rem;border-bottom:1px solid var(--border);padding-bottom:.3rem;margin:2rem 0 1rem}
+  h3{font-size:1rem;margin:1.2rem 0 .4rem}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 1rem}
+  .muted{color:var(--muted)}
+  .small{font-size:.85rem}
+
+  /* Top bar */
+  header.topbar{position:sticky;top:0;z-index:20;background:var(--card2);border-bottom:1px solid var(--border);box-shadow:var(--shadow)}
+  .topbar-inner{display:flex;flex-wrap:wrap;gap:.6rem 1rem;align-items:center;padding:.6rem 1rem;max-width:1120px;margin:0 auto}
+  .topbar h1{flex:1 1 auto;min-width:220px}
+  .meta{display:flex;flex-wrap:wrap;gap:.4rem}
+  .meta label{display:flex;flex-direction:column;font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
+  .meta input{font:inherit;font-size:.85rem;padding:.25rem .4rem;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;min-width:120px}
+  .actions{display:flex;flex-wrap:wrap;gap:.4rem}
+  button{font:inherit;cursor:pointer;background:var(--card);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:.3rem .6rem}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+  .icon-btn{font-size:1rem;line-height:1;padding:.3rem .5rem}
+
+  /* Progress */
+  .progress{position:sticky;top:0;z-index:10}
+  .progress-inner{max-width:1120px;margin:0 auto;padding:.5rem 1rem;background:var(--bg);border-bottom:1px solid var(--border)}
+  .bar{display:flex;height:14px;border-radius:7px;overflow:hidden;border:1px solid var(--border);background:var(--untested)}
+  .bar span{display:block;height:100%}
+  .seg-pass{background:var(--pass)} .seg-fail{background:var(--fail)} .seg-na{background:var(--na)}
+  .legend{display:flex;flex-wrap:wrap;gap:.4rem 1rem;margin-top:.4rem;font-size:.82rem;align-items:center}
+  .dot{display:inline-block;width:.7em;height:.7em;border-radius:2px;margin-right:.3em;vertical-align:baseline}
+  .filter{margin-left:auto;display:flex;gap:.3rem;align-items:center}
+  .filter button.active{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+
+  /* About */
+  details.about{background:var(--card);border:1px solid var(--border);border-radius:10px;margin:1rem 0;padding:.4rem 1rem}
+  details.about>summary{cursor:pointer;font-weight:600;padding:.4rem 0}
+  table{border-collapse:collapse;width:100%;font-size:.86rem;margin:.6rem 0}
+  th,td{border:1px solid var(--border);padding:.4rem .55rem;text-align:left;vertical-align:top}
+  th{background:var(--card);position:sticky}
+  .scroll-x{overflow-x:auto}
+
+  /* Phases */
+  .phase{border:1px solid var(--border);border-radius:10px;margin:1rem 0;overflow:hidden;background:var(--card2)}
+  .phase>.head{display:flex;align-items:center;gap:.6rem;padding:.6rem .9rem;background:var(--card);cursor:pointer;user-select:none}
+  .phase>.head .caret{transition:transform .15s;color:var(--muted)}
+  .phase.collapsed>.head .caret{transform:rotate(-90deg)}
+  .phase>.head h3{margin:0;flex:1 1 auto}
+  .phase>.head .frs{font-size:.78rem;color:var(--muted);font-weight:normal}
+  .mini{display:flex;height:8px;width:120px;border-radius:5px;overflow:hidden;border:1px solid var(--border);background:var(--untested)}
+  .mini span{display:block;height:100%}
+  .phase-count{font-size:.75rem;color:var(--muted);min-width:3.2rem;text-align:right}
+  .phase>.body{padding:.4rem .6rem 1rem}
+  .phase.collapsed>.body{display:none}
+
+  .st{border:1px solid var(--border);border-radius:9px;margin:.6rem 0;padding:.6rem .8rem;background:var(--bg)}
+  .st.mark-pass{border-left:5px solid var(--pass)}
+  .st.mark-fail{border-left:5px solid var(--fail)}
+  .st.mark-na{border-left:5px solid var(--na)}
+  .st .st-top{display:flex;flex-wrap:wrap;gap:.5rem;align-items:baseline}
+  .st .st-id{font-family:ui-monospace,Consolas,monospace;font-weight:700;color:var(--accent)}
+  .chip{font-size:.66rem;text-transform:uppercase;letter-spacing:.04em;padding:.1rem .4rem;border-radius:10px;background:var(--chip);color:var(--chip-fg);border:1px solid var(--border)}
+  .chip.reg{background:var(--reg-bg);color:var(--reg);border-color:var(--reg)}
+  .st .field{margin:.35rem 0}
+  .st .field .k{font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);display:block}
+  .st .controls{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-top:.5rem}
+  .tri{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+  .tri button{border:0;border-right:1px solid var(--border);border-radius:0;padding:.3rem .7rem;background:var(--card);font-weight:600}
+  .tri button:last-child{border-right:0}
+  .tri button[aria-pressed="true"].b-pass{background:var(--pass);color:#fff}
+  .tri button[aria-pressed="true"].b-fail{background:var(--fail);color:#fff}
+  .tri button[aria-pressed="true"].b-na{background:var(--na);color:#fff}
+  .st textarea{flex:1 1 240px;min-height:2.1rem;font:inherit;font-size:.85rem;padding:.35rem .5rem;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;resize:vertical}
+  .st.hidden{display:none}
+
+  .readonly-note{background:var(--card);border:1px dashed var(--border);border-radius:9px;padding:.5rem .8rem;margin:.6rem 0;color:var(--muted)}
+  footer{margin:2rem 0 0;padding-top:1rem;border-top:1px solid var(--border);color:var(--muted);font-size:.82rem}
+
+  @media print{
+    header.topbar,.progress,.actions,.filter,.tri,.phase>.head .caret,.mini{display:none !important}
+    .phase,.st{break-inside:avoid;border-color:#999}
+    details.about{border:0}
+    body{padding:0}
+    .st .controls::before{content:"Result: " attr(data-print-status);font-weight:700}
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <h1>FlashViewer — Manual Smoke Tests</h1>
+    <div class="meta">
+      <label>App build / version <input id="m-build" placeholder="e.g. 0.1.0 (git abc123)"></label>
+      <label>Tester <input id="m-tester" placeholder="name"></label>
+      <label>Date <input id="m-date" type="date"></label>
+    </div>
+    <div class="actions">
+      <button id="btn-expand">Expand all</button>
+      <button id="btn-collapse">Collapse all</button>
+      <button id="btn-export" class="primary">Export JSON</button>
+      <button id="btn-import">Import JSON</button>
+      <input id="file-import" type="file" accept="application/json,.json" hidden>
+      <button id="btn-print">Print</button>
+      <button id="btn-reset">Reset all</button>
+      <button id="btn-theme" class="icon-btn" title="Toggle light/dark">◐</button>
+    </div>
+  </div>
+</header>
+
+<div class="progress">
+  <div class="progress-inner">
+    <div class="bar" id="overall-bar" aria-hidden="true">
+      <span class="seg-pass" style="width:0"></span><span class="seg-fail" style="width:0"></span><span class="seg-na" style="width:0"></span>
+    </div>
+    <div class="legend">
+      <span id="ov-text">0 / 0 marked</span>
+      <span><i class="dot" style="background:var(--pass)"></i>Pass <b id="c-pass">0</b></span>
+      <span><i class="dot" style="background:var(--fail)"></i>Fail <b id="c-fail">0</b></span>
+      <span><i class="dot" style="background:var(--na)"></i>N/A <b id="c-na">0</b></span>
+      <span><i class="dot" style="background:var(--untested)"></i>Untested <b id="c-unt">0</b></span>
+      <span class="filter">Show:
+        <button data-filter="all" class="active">All</button>
+        <button data-filter="untested">Untested</button>
+        <button data-filter="pass">Passed</button>
+        <button data-filter="fail">Failed</button>
+      </span>
+    </div>
+  </div>
+</div>
+
+<main class="wrap">
+  <p class="muted small">Companion catalogue to
+    <a href="SRS.md">SRS</a> · <a href="SDD.md">SDD</a> · <a href="TEST_SPEC.md">TEST_SPEC</a> ·
+    <a href="FLASHVIEWER_REVAMP_PLAN.md">Revamp Plan</a>. The automated suite (104 <code>ctest</code>
+    cases) guards unit/headless-GL logic; this is the human counterpart — end-to-end GUI scenarios run
+    before a release (or per changed phase). Every scenario is traceable to the SRS FRs, SDD sections,
+    and incremental fixes; the closing matrix proves every implemented FR is exercised. Marks and notes
+    are saved in your browser (<code>localStorage</code>) — use <b>Export JSON</b> to archive a run.</p>
+
+  <details class="about">
+    <summary>How to use · Environment · Reference datasets · Conventions</summary>
+
+    <h3>1. How to use</h3>
+    <ul>
+      <li><b>Scope of a run.</b> A <i>full</i> run executes Phases 1–12 top to bottom plus the
+        cross-cutting scenario. A <i>targeted</i> run executes only the changed phase(s) plus that
+        phase's <b>Regression</b> rows.</li>
+      <li><b>Marking.</b> Set each scenario to PASS / FAIL / N/A (click a set button again to clear it).
+        On FAIL, add a note, capture a screenshot + the exported log (ST-P1-6), and file an issue citing
+        the <code>ST-</code> id. Fill the run header (build / tester / date) once.</li>
+      <li><b>Analysis-vs-display invariant.</b> Wherever a step both reprojects for display and inspects
+        a value, the inspected value must come from <b>source</b> pixels, never the warped display
+        (FR-CRS-4 / FR-ACC-2). Do not "fix" a reported value to match the on-screen warped block.</li>
+      <li><b>ID scheme.</b> <code>ST-P&lt;phase&gt;-&lt;n&gt;</code> functional; <code>ST-P&lt;phase&gt;-R&lt;n&gt;</code>
+        regression. <b>TC-ref</b> links the matching automated case in TEST_SPEC.</li>
+    </ul>
+
+    <h3>2. Environment &amp; build</h3>
+    <p>Smoke tests are <b>interactive</b> (no <code>QT_QPA_PLATFORM=offscreen</code>). Build (Windows
+      dev machine): enter the VS 2022 dev shell, <code>conda activate flashviewer-windows</code>, prepend
+      the aqt Qt <code>…\Qt\6.6.3\msvc2019_64\bin</code> to <code>PATH</code>, then
+      <code>cmake --build build/windows-release --target FlashViewer</code> →
+      <code>build/windows-release/FlashViewer.exe</code>. Test <i>steps</i> are UI-level and apply on
+      Linux/macOS too; only this preamble is Windows-specific. <code>Help → About</code> shows the
+      version stamped from <code>VERSION</code> (FR-INST-4). Reset between phases with
+      <code>File → Close All</code>; <code>View → Panels → Reset Panel Layout</code> (FR-APP-9) restores docks.</p>
+
+    <h3>3. Reference datasets</h3>
+    <p class="small muted">Curated, free/open, mostly &lt; ~200 MB, into a <code>smoke-data/</code> folder.
+      Some portals need a free account (USGS EarthExplorer, NASA Earthdata, Copernicus). Where a download
+      is impractical, the synthetic <code>FixtureFactory</code> rasters (F-GRAD, F-CAT, F-CRSPAIR, F-NDVI,
+      F-NODATA, F-MULTI — see TEST_SPEC §2) reproduce the same data characters.</p>
+    <div class="scroll-x">
+    <table>
+      <thead><tr><th>Alias</th><th>Type / format</th><th>CRS</th><th>Source (free)</th><th>~Size</th><th>Used by</th></tr></thead>
+      <tbody>
+        <tr><td><b>DS-L8</b></td><td>Landsat 8/9 multispectral, per-band <b>GeoTIFF/COG</b></td><td>UTM (326xx)</td><td>USGS EarthExplorer; AWS Open Data <code>registry.opendata.aws/usgs-landsat</code></td><td>60–120 MB</td><td>IO, RGB, math, bands, ops</td></tr>
+        <tr><td><b>DS-BT</b></td><td><i>(on hand)</i> <code>Landsat_TOA_BT_100m.tif</code> single-band float</td><td>UTM 32643</td><td>user-provided</td><td>~5 MB</td><td>CRS reproject, inspect, scalebar</td></tr>
+        <tr><td><b>DS-S2</b></td><td>Sentinel-2 L2A band / TCI <b>JPEG 2000 (.jp2)</b></td><td>UTM</td><td>Copernicus Data Space; AWS <code>sentinel-s2-l2a</code></td><td>10–110 MB</td><td><code>jp2</code> format path (FR-IO-4)</td></tr>
+        <tr><td><b>DS-DEM</b></td><td>SRTM / Copernicus <b>GLO-30 DEM</b>, single-band GeoTIFF</td><td><b>EPSG:4326</b></td><td>OpenTopography; AWS <code>copernicus-dem-30m</code></td><td>5–25 MB</td><td>CRS reproject 4326→UTM, gray, scalebar deg↔m</td></tr>
+        <tr><td><b>DS-LC</b></td><td>Categorical <b>land cover</b> (ESA WorldCover / NLCD), integer + colour table</td><td>4326 / projected</td><td><code>esa-worldcover.org</code>; <code>mrlc.gov</code></td><td>5–40 MB</td><td>nearest-neighbour default, categorical warp, colour table</td></tr>
+        <tr><td><b>DS-NC</b></td><td><b>NetCDF</b> multi-variable (subdatasets)</td><td>varies / none</td><td>Unidata samples <code>unidata.ucar.edu/software/netcdf/examples/files.html</code> (<code>tos_O1_2001-2002.nc</code>)</td><td>&lt; 5 MB</td><td>subdatasets, coord-assign</td></tr>
+        <tr><td><b>DS-HDF</b></td><td><b>MODIS .hdf</b> (HDF-EOS) or small HDF5</td><td>sinusoidal / none</td><td>NASA Earthdata (LP DAAC MOD11A1)</td><td>5–30 MB</td><td>subdataset enumeration (FR-IO-4/8)</td></tr>
+        <tr><td><b>DS-COG</b></td><td>Public <b>COG over HTTPS</b> (remote streaming)</td><td>any</td><td><code>/vsicurl/https://…</code> to an AWS open-data Landsat/Sentinel COG</td><td>streamed</td><td>remote open (FR-IO-3), TLS/scheme (FR-SEC-1/2)</td></tr>
+        <tr><td><b>DS-RAW</b></td><td>Raw <b>BSQ/BIL/BIP</b> + header</td><td>—</td><td>derive: <code>gdal_translate -of EHdr DS-DEM.tif dem.bil</code></td><td>~same</td><td>Binary Import (FR-IO-5/6)</td></tr>
+        <tr><td><b>DS-BAD</b></td><td>Malformed raster + <b>blocked URL</b></td><td>—</td><td>truncate a <code>.tif</code>; <code>http://169.254.169.254/…</code>, <code>http://127.0.0.1/…</code></td><td>tiny</td><td>error containment (FR-ERR-1/6), SSRF (FR-SEC-3)</td></tr>
+        <tr><td><b>DS-HYP</b> <i>(opt)</i></td><td>Hyperspectral <b>ENVI</b> cube (<code>.hdr</code>+raw), 100–220 bands</td><td>varies</td><td>AVIRIS "Indian Pines"/Pavia (<code>ehu.eus/ccwintco</code>)</td><td>few MB</td><td>many-band selection, spectral profile plot</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="small"><b>CRS pair for reprojection:</b> DS-BT (UTM 32643) + DS-DEM (EPSG:4326) over the
+      same ground area gives an overlay whose alignment proves on-the-fly reprojection (or use synthetic
+      F-CRSPAIR).</p>
+
+    <h3>4. Conventions</h3>
+    <p class="small">Each scenario shows <b>Steps</b>, <b>Expected</b>, <b>Covers</b> (primary FRs + SDD
+      section + named incremental fix) and <b>TC-ref</b>. Unless stated, start from a freshly launched app
+      with the dataset(s) named in Steps loaded.</p>
+  </details>
+
+  <div id="phases"></div>
+
+  <section id="deferred">
+    <h2>Deferred to 0.2.0 (not yet runnable — documented for completeness)</h2>
+    <div class="readonly-note">
+      <p><b>Phase 13 — Accessibility, i18n, Packaging &amp; License — deferred to 0.2.0</b> (predominantly deployment work; see SRS Appendix E). Mostly <code>[Specified]</code>/<code>[Partial]</code>.
+        <i>Intended checks:</i> keyboard-only operation with no traps (FR-A11Y-1); visible focus + logical
+        order (FR-A11Y-2/3); AT names/roles (FR-A11Y-4); high-contrast theme ≥ 4.5:1 and no colour-only
+        signalling (FR-A11Y-5/6); externalised strings / <code>.qm</code> loading / locale formatting / RTL
+        (FR-I18N-1…4); UTF-8 paths &amp; labels (FR-I18N-5, checkable now with a non-ASCII filename);
+        self-contained distributable + native installer + clean-machine smoke (FR-INST-2/3/5). Buildability
+        (FR-INST-1) and the version stamp (FR-INST-4, ST-P1-3) are exercisable today.</p>
+    </div>
+  </section>
+
+  <section id="matrix">
+    <h2>Traceability Matrix — FR → covering scenario</h2>
+    <p class="small muted">Every implemented FR is covered by ≥ 1 scenario. <code>[Def]</code>/<code>[Part]</code>/<code>[Spec]</code>
+      mark requirements whose full verification awaits the 0.2.0 (Phase 13) work (runnable portion still linked). Every FR
+      is a full token so the page is grep-verifiable against the SRS.</p>
+    <div class="scroll-x">
+    <table>
+      <thead><tr><th>FR(s)</th><th>Covered by</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>FR-IO-1, FR-IO-2</td><td>ST-P2-1</td><td>✓</td></tr>
+        <tr><td>FR-IO-3</td><td>ST-P2-2, ST-P10-2</td><td>✓</td></tr>
+        <tr><td>FR-IO-4</td><td>ST-P2-3</td><td>✓</td></tr>
+        <tr><td>FR-IO-5, FR-IO-6</td><td>ST-P2-4</td><td>✓</td></tr>
+        <tr><td>FR-IO-8, FR-IO-10</td><td>ST-P2-5</td><td>✓</td></tr>
+        <tr><td>FR-IO-9</td><td>ST-P2-6</td><td>✓</td></tr>
+        <tr><td>FR-IO-12</td><td>ST-P2-7</td><td>✓</td></tr>
+        <tr><td>FR-RND-1, FR-RND-2, FR-RND-3</td><td>ST-P3-1</td><td>✓</td></tr>
+        <tr><td>FR-RND-4, FR-RND-5</td><td>ST-P3-5</td><td>✓</td></tr>
+        <tr><td>FR-RND-6, FR-RND-7</td><td>ST-P3-6</td><td>✓</td></tr>
+        <tr><td>FR-RND-8</td><td>ST-P3-4, ST-P3-R1, ST-P11-R1</td><td>✓</td></tr>
+        <tr><td>FR-RND-9</td><td>ST-P3-7</td><td>✓</td></tr>
+        <tr><td>FR-RND-10</td><td>ST-P3-2, ST-P3-3, ST-P3-R1</td><td>✓</td></tr>
+        <tr><td>FR-NAV-1, FR-NAV-2, FR-NAV-3, FR-NAV-4, FR-NAV-5</td><td>ST-P3-1</td><td>✓</td></tr>
+        <tr><td>FR-BND-1</td><td>ST-P4-1</td><td>✓</td></tr>
+        <tr><td>FR-BND-2, FR-BND-3, FR-BND-4</td><td>ST-P4-2</td><td>✓</td></tr>
+        <tr><td>FR-BND-5, FR-BND-6</td><td>ST-P4-3</td><td>✓</td></tr>
+        <tr><td>FR-HST-1, FR-HST-2, FR-HST-3, FR-HST-4, FR-HST-5</td><td>ST-P4-4, ST-P4-R1</td><td>✓</td></tr>
+        <tr><td>FR-HST-6</td><td>ST-P4-5</td><td>✓</td></tr>
+        <tr><td>FR-LYR-1, FR-LYR-2, FR-LYR-3, FR-LYR-4, FR-LYR-5, FR-LYR-6</td><td>ST-P6-1</td><td>✓</td></tr>
+        <tr><td>FR-OPS-1, FR-OPS-3, FR-OPS-4</td><td>ST-P9-1</td><td>✓</td></tr>
+        <tr><td>FR-OPS-2, FR-OPS-5</td><td>ST-P9-2</td><td>✓</td></tr>
+        <tr><td>FR-OPS-6</td><td>ST-P9-4</td><td>✓</td></tr>
+        <tr><td>FR-OPS-7, FR-OPS-8, FR-OPS-9</td><td>ST-P9-5</td><td>✓</td></tr>
+        <tr><td>FR-OPS-10, FR-OPS-11, FR-OPS-12</td><td>Deferred (§ above)</td><td>[Def]</td></tr>
+        <tr><td>FR-GIS-1</td><td>ST-P7-1</td><td>✓</td></tr>
+        <tr><td>FR-GIS-2, FR-GIS-3, FR-GIS-4</td><td>ST-P7-2</td><td>✓</td></tr>
+        <tr><td>FR-GIS-5, FR-GIS-6</td><td>ST-P7-3, ST-P6-7</td><td>✓</td></tr>
+        <tr><td>FR-MTH-1, FR-MTH-2, FR-MTH-3, FR-MTH-5, FR-MTH-8</td><td>ST-P8-1, ST-P8-R1</td><td>✓</td></tr>
+        <tr><td>FR-MTH-4, FR-MTH-6, FR-MTH-7</td><td>ST-P8-2</td><td>✓</td></tr>
+        <tr><td>FR-MTH-9</td><td>ST-P8-3</td><td>✓</td></tr>
+        <tr><td>FR-ANL-1, FR-ANL-2, FR-ANL-3</td><td>ST-P8-4</td><td>✓</td></tr>
+        <tr><td>FR-OSM-1, FR-OSM-7</td><td>ST-P5-1</td><td>✓</td></tr>
+        <tr><td>FR-OSM-2, FR-OSM-3, FR-OSM-4, FR-OSM-5, FR-OSM-6</td><td>ST-P5-3</td><td>✓</td></tr>
+        <tr><td>FR-OSM-8</td><td>ST-P5-2, ST-P11-6</td><td>✓</td></tr>
+        <tr><td>FR-PNE-1, FR-PNE-4</td><td>ST-P6-3</td><td>✓</td></tr>
+        <tr><td>FR-PNE-2, FR-PNE-3, FR-PNE-9</td><td>ST-P6-6</td><td>✓</td></tr>
+        <tr><td>FR-PNE-5, FR-PNE-6, FR-PNE-7</td><td>ST-P6-4</td><td>✓</td></tr>
+        <tr><td>FR-PNE-8</td><td>ST-P6-2</td><td>✓</td></tr>
+        <tr><td>FR-PNE-10</td><td>ST-P6-7</td><td>✓</td></tr>
+        <tr><td>FR-PNE-11</td><td>ST-P6-R1</td><td>✓</td></tr>
+        <tr><td>FR-APP-1</td><td>ST-P1-1</td><td>✓</td></tr>
+        <tr><td>FR-APP-2, FR-APP-6</td><td>ST-P1-2, ST-P1-9</td><td>✓</td></tr>
+        <tr><td>FR-APP-3, FR-APP-7</td><td>ST-P1-3</td><td>✓</td></tr>
+        <tr><td>FR-APP-4, FR-APP-9, FR-APP-10, FR-APP-11</td><td>ST-P1-4</td><td>✓</td></tr>
+        <tr><td>FR-APP-5</td><td>ST-P1-8</td><td>✓</td></tr>
+        <tr><td>FR-APP-8</td><td>ST-P1-5</td><td>✓</td></tr>
+        <tr><td>FR-APP-12</td><td>ST-P1-6</td><td>✓</td></tr>
+        <tr><td>FR-APP-13</td><td>ST-P1-7</td><td>✓</td></tr>
+        <tr><td>FR-APP-14</td><td>ST-P12-1, ST-P12-7</td><td>✓</td></tr>
+        <tr><td>FR-CRS-1, FR-CRS-3</td><td>ST-P11-1</td><td>✓</td></tr>
+        <tr><td>FR-CRS-2</td><td>ST-P11-2, ST-P11-R3</td><td>✓</td></tr>
+        <tr><td>FR-CRS-4</td><td>ST-P11-4, ST-P11-R2</td><td>✓</td></tr>
+        <tr><td>FR-CRS-5</td><td>ST-P11-5</td><td>✓</td></tr>
+        <tr><td>FR-CRS-6</td><td>ST-P11-3</td><td>✓</td></tr>
+        <tr><td>FR-CRS-7</td><td>ST-P11-6</td><td>✓</td></tr>
+        <tr><td>FR-CRS-8</td><td>ST-P11-7</td><td>✓</td></tr>
+        <tr><td>FR-CAP-1</td><td>ST-P6-5</td><td>✓</td></tr>
+        <tr><td>FR-CAP-2</td><td>ST-P6-3</td><td>✓</td></tr>
+        <tr><td>FR-CAP-3</td><td>ST-P2-3, ST-P6-5, ST-P12-6</td><td>✓</td></tr>
+        <tr><td>FR-SEC-1, FR-SEC-5, FR-SEC-6</td><td>ST-P10-4</td><td>✓</td></tr>
+        <tr><td>FR-SEC-2, FR-SEC-3</td><td>ST-P10-2</td><td>✓</td></tr>
+        <tr><td>FR-SEC-4</td><td>ST-P10-1</td><td>✓</td></tr>
+        <tr><td>FR-ACC-1</td><td>ST-P8-2</td><td>✓</td></tr>
+        <tr><td>FR-ACC-2</td><td>ST-P7-3, ST-P11-4</td><td>✓</td></tr>
+        <tr><td>FR-ACC-3</td><td>ST-P9-3</td><td>✓</td></tr>
+        <tr><td>FR-ERR-1, FR-ERR-6</td><td>ST-P10-1</td><td>✓</td></tr>
+        <tr><td>FR-ERR-2</td><td>ST-P10-2</td><td>✓</td></tr>
+        <tr><td>FR-ERR-3</td><td>ST-P10-3</td><td>✓</td></tr>
+        <tr><td>FR-ERR-4</td><td>ST-P11-5, ST-P10-R1</td><td>✓</td></tr>
+        <tr><td>FR-ERR-5, FR-ERR-7</td><td>ST-P10-5</td><td>✓</td></tr>
+        <tr><td>FR-ERR-8</td><td>ST-P10-6</td><td>✓</td></tr>
+        <tr><td>FR-INST-4</td><td>ST-P1-3</td><td>✓</td></tr>
+        <tr><td>FR-INST-1, FR-INST-2, FR-INST-3, FR-INST-5</td><td>Deferred (§ above)</td><td>[Part]/[Spec]</td></tr>
+        <tr><td>FR-A11Y-1, FR-A11Y-2, FR-A11Y-3, FR-A11Y-4, FR-A11Y-5, FR-A11Y-6</td><td>Deferred (partial via themed UI + ST-P1-4)</td><td>[Part]/[Spec]</td></tr>
+        <tr><td>FR-I18N-5</td><td>Deferred (UTF-8 path spot-check)</td><td>✓(partial)</td></tr>
+        <tr><td>FR-I18N-1, FR-I18N-2, FR-I18N-3, FR-I18N-4</td><td>Deferred (§ above)</td><td>[Spec]/[Part]</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <footer>
+    <p><b>FlashViewer Manual Smoke Tests</b> — sole source of truth (replaces the former
+      <code>MANUAL_SMOKE_TESTS.md</code>). v1.2 · tracks SRS v2.63 / SDD v1.58 (0.1.0 complete base release).
+      Update on any incremental change, alongside SRS/SDD/TEST_SPEC/REVAMP_PLAN. Self-contained &amp; offline;
+      results stored in your browser.</p>
+  </footer>
+</main>
+
+<script>
+/* ---- Scenario data (rendered into interactive rows). Every FR token preserved. ---- */
+const PHASES = [
+ {id:"P1", title:"Phase 1 — Application Shell & UI", frs:"FR-APP-1…13", rows:[
+  {st:"ST-P1-1", steps:"Toggle `View → Theme` (or theme control) light↔dark; restart the app", expected:"Whole UI restyles live; the last theme is restored on relaunch", covers:"FR-APP-1 · SDD themes", tc:"TC-APP-01"},
+  {st:"ST-P1-2", steps:"Move/resize the window, drag a dock into a new position, restart", expected:"Window geometry and dock layout restored; corrupt/incompatible layout version silently resets", covers:"FR-APP-2/6", tc:"TC-APP-02"},
+  {st:"ST-P1-3", steps:"`Help → GPU Info`; then `Help → About`", expected:"GPU renderer/vendor/GL version shown; About shows the app version + OpenGL 4.1 surface confirmed", covers:"FR-APP-3/7, FR-INST-4", tc:"TC-RND-09"},
+  {st:"ST-P1-4", steps:"Open the Log panel; `View → Panels` uncheck then recheck a panel; use Reset Panel Layout; drag a panel into the upper/lower half of a dock edge", expected:"Log shows levelled entries; closed panel reopens at its default location; nested (half-area) docking works; themed title-bar buttons", covers:"FR-APP-4/9/10/11", tc:"—"},
+  {st:"ST-P1-5", steps:"`Help → Licenses`", expected:"Product license + bundled third-party licenses listed", covers:"FR-APP-8 · SDD §13.2", tc:"TC-APP-08"},
+  {st:"ST-P1-6", steps:"In the Log panel click Export Logs, choose a file; reopen it; check the per-user app-data log file exists and rotates", expected:"Log saved to chosen file; persistent rotating log written; last export dir remembered", covers:"FR-APP-12, FR-ERR-8", tc:"—"},
+  {st:"ST-P1-7", steps:"Open the GPU Monitor panel; load & pan DS-L8 to upload tiles, then remove the layer", expected:"Sparkline + numeric VRAM estimate, resident tile count, pane count, GPU identity update as tiles upload/release", covers:"FR-APP-13", tc:"TC-BND (VRAM)"},
+  {st:"ST-P1-8", steps:"Load DS-L8, arrange a 2-pane layout, `Ctrl+Shift+S`; choose Active pane, then repeat choosing Entire pane layout", expected:"Screenshot excludes pane chrome + border, keeps colorbar/scale bar/highlight; layout capture composites front pane per region with theme background", covers:"FR-APP-5", tc:"TC-BND-08"},
+  {st:"ST-P1-9", steps:"`Ctrl+Q` after changing theme, OSM URL, a pane's Project CRS, and default resampling", expected:"On relaunch those settings persist; no unsaved-data prompt", covers:"FR-APP-6", tc:"TC-APP-06"}
+ ]},
+ {id:"P2", title:"Phase 2 — Raster Opening & Formats", frs:"FR-IO-1…12", rows:[
+  {st:"ST-P2-1", steps:"`File → Open` (`Ctrl+O`) → DS-L8 `.tif`; then drag a second `.tif` onto the window", expected:"Both open and render; layer count +1 each", covers:"FR-IO-1/2", tc:"TC-IO-01/02"},
+  {st:"ST-P2-2", steps:"`File → Open URL` (`Ctrl+U`) → paste DS-COG `/vsicurl/https://…`", expected:"Remote layer streams in; tiles fetched over TLS", covers:"FR-IO-3 · SDD §12.2", tc:"TC-IO-03"},
+  {st:"ST-P2-3", steps:"Open one file of each format: GeoTIFF, DS-NC NetCDF, DS-HDF HDF, DS-HYP ENVI, DS-RAW binary, a `.vrt`, DS-S2 `.jp2`", expected:"Each opens or routes to the correct dialog (binary→import, multi-var→subdataset)", covers:"FR-IO-4", tc:"TC-IO-04"},
+  {st:"ST-P2-4", steps:"Open DS-RAW `.bin`: set lines/samples/bands/dtype/interleave/offset/byte-order; observe the hex preview; enter an invalid spec then a valid one", expected:"Hex header shown; invalid blocked; valid builds a VRT and opens; pixels match", covers:"FR-IO-5/6", tc:"TC-IO-05/06"},
+  {st:"ST-P2-5", steps:"Open DS-NC (multi-var): pick one or more subdatasets; after opening, switch the layer's active subdataset", expected:"Subdataset list shown; multi-select opens; switching re-reads the variable", covers:"FR-IO-8/10", tc:"TC-IO-07/09"},
+  {st:"ST-P2-6", steps:"Open a subdataset without a spatial reference (DS-NC identity-GT var)", expected:"Coordinate-assign dialog offered; assign or skip both honoured", covers:"FR-IO-9", tc:"TC-IO-08"},
+  {st:"ST-P2-7", steps:"Open DS-L8; inspect the Raster Info panel", expected:"width/height/bands/CRS/path/geotransform/extent/per-band stats/no-data all populated", covers:"FR-IO-12, FR-LYR-6", tc:"TC-IO-10"}
+ ]},
+ {id:"P3", title:"Phase 3 / 3B — Rendering & Navigation", frs:"FR-RND-1…10, FR-NAV-1…5", rows:[
+  {st:"ST-P3-1", steps:"Load DS-L8; pan by drag; scroll-zoom over a feature; press `Space`; request fit-to-single on a layer", expected:"Tiled LOD streams (only visible tiles); pan follows mouse; zoom keeps the cursor point fixed; `Space` fits all; fit-single fills viewport", covers:"FR-RND-1/2/3, FR-NAV-1…5", tc:"TC-NAV-01…05, TC-RND-05/06"},
+  {st:"ST-P3-2", steps:"Zoom past native resolution on DS-L8", expected:"Pixels stay crisp (nearest-neighbour fallback at magnification); no blurry upsampling", covers:"FR-RND-10", tc:"TC-RND-15"},
+  {st:"ST-P3-3", steps:"Minify DS-L8; switch display resampling bilinear → bicubic(smooth) → bicubic(sharp) (Layer Properties); confirm no tile-block seams", expected:"Each method changes smoothing; result seamless across the internal tile grid", covers:"FR-RND-10 · SDD §7", tc:"TC-RND-12/16"},
+  {st:"ST-P3-4", steps:"Load DS-DEM (float w/ undeclared NaN fill or DS-BT edges); observe no-data areas; set a per-layer no-data override + a no-data colour", expected:"NaN/±Inf always transparent even with no declared no-data; override honoured; kernel footprint touching no-data → no-data (no edge bleed)", covers:"FR-RND-8 · SDD §5.3", tc:"TC-RND-03/10/11/13"},
+  {st:"ST-P3-5", steps:"Load DS-L8 as RGB composite (3 bands) and as single-band pseudocolor; inspect a float pixel value", expected:"RGB with per-channel stretch; pseudocolor gray+colormap; full float32 retained (no requantization)", covers:"FR-RND-4/5", tc:"TC-RND-01/02/04"},
+  {st:"ST-P3-6", steps:"Observe anti-aliasing on diagonal edges; let a large layer load and watch progressive refresh", expected:"4× MSAA smooths edges; view refreshes progressively then stops when tiles ready / ≤30 s", covers:"FR-RND-6/7", tc:"TC-RND-07/09"},
+  {st:"ST-P3-7", steps:"Stack two layers; change opacity and draw order; toggle visibility", expected:"Opacity blends; top-of-stack wins; hidden layer not drawn", covers:"FR-RND-9", tc:"TC-RND-08"},
+  {st:"ST-P3-R1", reg:true, steps:"(3B) On a no-data boundary, switch bilinear↔bicubic and zoom across native", expected:"No edge-bleed halo at data↔no-data; nearest at/above native consistent across methods", covers:"3B GPU-resampling + edge-bleed fix", tc:"TC-RND-11/13/15"}
+ ]},
+ {id:"P4", title:"Phase 4 — Band, Colormap & Histogram", frs:"FR-BND-1…6, FR-HST-1…6", rows:[
+  {st:"ST-P4-1", steps:"On DS-L8: in the Band Selector switch R/G/B indices (composite) and single-band (Gray); toggle RGB↔Gray repeatedly", expected:"Rendered bands update; colormap control appears only in Gray; panel geometry does not reflow on RGB↔Gray", covers:"FR-BND-1", tc:"—"},
+  {st:"ST-P4-2", steps:"Cycle colormaps gray, viridis, jet, hot, RdYlGn, plasma; invert the active map", expected:"All six present; 256-entry opaque LUTs; inversion flips the ramp", covers:"FR-BND-2/3/4", tc:"TC-CM"},
+  {st:"ST-P4-3", steps:"For a pseudocolor layer, dock the legend to a corner, change orientation V↔H, edit its unit label & precision; move the layer to another pane; hide/show via Show Colorbar", expected:"Legend re-anchors to its corner (no drift); unit/precision/orientation travel with the layer; hidden colorbar absent from screenshots", covers:"FR-BND-5/6", tc:"TC-BND-08"},
+  {st:"ST-P4-4", steps:"Open the Histogram on a Gray layer: read the full-range bins with the window defaulting to 1/99; drag a stretch handle; use Auto-Stretch; type exact min/max; switch value↔percentile mode", expected:"Bins over full range; window at auto-stretch; during drag the window stays fixed and re-settles on release; auto fills value+percentile fields; modes stay in sync", covers:"FR-HST-1/2/3/4/5", tc:"TC-HST-06, TC-STAT-1"},
+  {st:"ST-P4-5", steps:"Switch the layer to RGB composite; open the Histogram", expected:"Three R/G/B histograms (red/green/blue bins, equal visual weight), each with own handles + value/percentile + auto-stretch; each applies independently; panel scrolls", covers:"FR-HST-6", tc:"—"},
+  {st:"ST-P4-R1", reg:true, steps:"Commit a stretch handle beyond the auto-stretch window", expected:"Visible window expands to keep the handle reachable; bars don't slide under the cursor mid-drag", covers:"Phase-4 histogram display refinements", tc:"—"}
+ ]},
+ {id:"P5", title:"Phase 5 — OpenStreetMap Basemap", frs:"FR-OSM-1…8", rows:[
+  {st:"ST-P5-1", steps:"Fresh launch: confirm basemap off; enable it with no layers loaded", expected:"Off by default (not persisted); enabling with no layers resets to a geographic world view so tiles are visible", covers:"FR-OSM-1/7", tc:"TC-OSM, TC-102"},
+  {st:"ST-P5-2", steps:"Load DS-DEM (4326) then DS-L8 (UTM) with basemap on", expected:"Basemap draws beneath rasters and co-registers under both geographic and projected layers (per-tile reprojection)", covers:"FR-OSM-1/8, FR-CRS-7", tc:"TC-CRS-10"},
+  {st:"ST-P5-3", steps:"Change the tile `{z}/{x}/{y}` URL; pan across the antimeridian; remove the last layer", expected:"URL persists; cache cleared + pending aborted on change (no stale tiles); antimeridian wraps; removing last layer resets to world view", covers:"FR-OSM-2/3/4/5/6", tc:"TC-OSM"}
+ ]},
+ {id:"P6", title:"Phase 6 — Layers & Multi-Pane", frs:"FR-LYR-1…6, FR-PNE-1…11, FR-CAP-1/2", rows:[
+  {st:"ST-P6-1", steps:"Load 3 layers: toggle visibility & opacity; reorder by drag and up/down; right-click → remove / zoom-to / properties; change active layer", expected:"Layer panel reflects all; reorder works; context actions work; active-change updates band/colormap/histogram/info/no-data panels; remove frees GPU resources", covers:"FR-LYR-1…6", tc:"TC-11, TC-78"},
+  {st:"ST-P6-2", steps:"`View → Pane Layout`: cycle Full / Side-by-side / Top-bottom / Quarter; drag pane ID labels between regions; observe overflow stacking + pill strip; drop a layer on an empty region", expected:"Modes give 1/2/2/4 regions sized equally; panes auto-fill, overflow stacks with a pill strip; empty region shows \"Drop pane here\" and spawns a pane on layer-drop", covers:"FR-PNE-8", tc:"TC-30, TC-66"},
+  {st:"ST-P6-3", steps:"`Ctrl+Shift+N` add panes (≥4); assign layers via drag and To Pane submenu; click panes to activate", expected:"New pane not auto-synced; every layer in exactly one pane; newly opened layer lands in active pane; re-assign moves layer + legend/colour; activating a pane makes its topmost layer active", covers:"FR-PNE-1/4, FR-CAP-2", tc:"TC-33, TC-37"},
+  {st:"ST-P6-4", steps:"Observe pane colours + IDs: default pane is accent-blue; set a pane Color; note active vs dormant styling", expected:"Every pane has a distinct theme colour incl. default; layer rows colour-coded by pane; active pane solid border+bold ID, dormant faint", covers:"FR-PNE-5/6/7", tc:"TC-93"},
+  {st:"ST-P6-5", steps:"Load ≥32 layers across 4 panes", expected:"No functional failure; all render in their panes", covers:"FR-CAP-1, FR-PNE-4", tc:"TC-33"},
+  {st:"ST-P6-6", steps:"Gear menu → Sync With another pane; pan/zoom either; move the mouse; then Unsync; close a synced pane", expected:"Master ★ / slave mirror icons; slaves match + stay linked; ghost-cursor \"X\" in every synced pane at the shared point; unsync/close dissolves group", covers:"FR-PNE-2/3/9", tc:"TC-81"},
+  {st:"ST-P6-7", steps:"In a sync group, `Ctrl`+click / left-click / right-click to inspect; remove the active layer of one pane", expected:"Inspect pane-scoped; synced click aggregates per-pane drop-downs at shared point; red highlight in every synced pane; hidden layers excluded; stale drop-down removed on layer removal", covers:"FR-PNE-10, FR-GIS-5", tc:"TC-CRS-05"},
+  {st:"ST-P6-R1", reg:true, steps:"Close a pane whose region has a sibling, and close the only pane", expected:"Layers reassigned to a same-region pane (fit if empty); surviving panes repaint (not blanked); closing the only pane clears its layers but keeps it — never zero panes, never a crash", covers:"FR-PNE-11 · close-blank fix (`AA_ShareOpenGLContexts`)", tc:"—"}
+ ]},
+ {id:"P7", title:"Phase 7 — GIS Overlays & Inspection", frs:"FR-GIS-1…6", rows:[
+  {st:"ST-P7-1", steps:"Load DS-DEM (4326) in one pane and DS-L8 (UTM) in another; read each scale bar; zoom each", expected:"Geographic pane's bar in degrees (→ arc-min/sec small spans); projected pane's in m/km; per-pane, independent; each hide-able via gear Show Scale Bar", covers:"FR-GIS-1 · scalebar native-units fix", tc:"—"},
+  {st:"ST-P7-2", steps:"Move the cursor; read the status bar coordinate, m/px zoom readout, and CRS name across wheel/keyboard/fit/sync", expected:"Cursor coords in Project CRS ≥6 sig-digits; m/px (→km/px) tracks active/hovered pane on every scale change; CRS name shown", covers:"FR-GIS-2/3/4", tc:"—"},
+  {st:"ST-P7-3", steps:"`Ctrl`+click a pixel", expected:"All band values at the point shown (active or all visible layers), from source pixels; inspected pixel marked on canvas", covers:"FR-GIS-5/6, FR-ACC-2", tc:"TC-CRS-05"}
+ ]},
+ {id:"P8", title:"Phase 8 — Raster Math & Analysis", frs:"FR-MTH-1…9, FR-ANL-1…3, FR-ACC-1/2", rows:[
+  {st:"ST-P8-1", steps:"`Tools → Raster Math` (`Ctrl+M`): expand the layer/band tree; click bands to insert `L#B#`; type `(L1B5 - L1B4)/(L1B5 + L1B4)`; use a helper (`sqrt`); enter a bad expression", expected:"Tree inserts tokens; live validation flags the bad expression + shows helpers; NDVI expression accepted", covers:"FR-MTH-1/2/3/5/8", tc:"TC-MTH-06/07/08"},
+  {st:"ST-P8-2", steps:"Run NDVI with no-data mask on (default), then off; pick Output CRS, Output pane (New Pane), input-CRS handling, in/out resampling; Run", expected:"Tile-by-tile eval; result GeoTIFF added to chosen pane; masked run → NaN where inputs are no-data, result no-data = NaN; unused warp selectors disabled; reference-CRS readout + preview shown", covers:"FR-MTH-4/6/7/8 · FR-ACC-1/2", tc:"TC-ACC-01, TC-STAT-1, NDVI oracle"},
+  {st:"ST-P8-3", steps:"Make a Raster Math result a temporary file; remove its layer; also quit the app with a temp result present", expected:"Temp result auto-deleted on layer removal and on shutdown", covers:"FR-MTH-9", tc:"TC-OPS-13"},
+  {st:"ST-P8-4", steps:"Press `S`: click several pixels for spectral curves, then clear; press `P`: draw an ROI, switch Scan/Pixel modes, set quantile p", expected:"Spectral window adds a curve per click + clears; profile computes Mean/Median/StdDev/Quantile over the ROI in both modes", covers:"FR-ANL-1/2/3", tc:"—"},
+  {st:"ST-P8-R1", reg:true, steps:"Run math referencing inputs of mixed CRS with (1) Reproject inputs and (2) Pixel-align; choose an existing Output pane whose CRS differs from Output CRS", expected:"Non-blocking mismatch note; input warp only when mixed CRS; Proceed/Cancel warning on pane/CRS mismatch; single Run consolidates former Run / Run-and-Save-As", covers:"Phase-8 raster-math follow-ups (input-CRS, single Output CRS, decoupled CRS/pane)", tc:"—"}
+ ]},
+ {id:"P9", title:"Phase 9 — GDAL Operations + Resampling", frs:"FR-OPS-1…12, FR-ACC-3", rows:[
+  {st:"ST-P9-1", steps:"GDAL Ops → Merge several DS-L8 tiles; watch progress; on completion", expected:"Async mosaic → compressed GeoTIFF; progress reported without blocking; result auto-added", covers:"FR-OPS-1/3/4", tc:"TC-OPS-12"},
+  {st:"ST-P9-2", steps:"Warp/Reproject DS-BT to a new EPSG; open the resampling selector on DS-LC (categorical) vs DS-DEM (continuous)", expected:"Reproject → GeoTIFF; selector offers ≥{nearest,bilinear,cubic}; defaults nearest for categorical, bilinear for continuous; override allowed", covers:"FR-OPS-2/5 · SDD §7", tc:"TC-OPS-05/06/07"},
+  {st:"ST-P9-3", steps:"On DS-LC verify nearest introduces no new class values; on a no-data raster run cubic Warp", expected:"Nearest output value-set ⊆ source; cubic does not smear no-data into valid pixels", covers:"FR-ACC-3, FR-OPS-6", tc:"TC-OPS-08/09/11"},
+  {st:"ST-P9-4", steps:"Set input no-data and output no-data on Merge/Warp; reopen the result", expected:"Input value excluded from kernel; output no-data encoded in band metadata + auto-loaded on open (defaults to input)", covers:"FR-OPS-6", tc:"TC-OPS-10"},
+  {st:"ST-P9-5", steps:"Merge inputs in differing CRS via Output CRS + Reproject vs Pixel-align; toggle temporary-output and Add result to a pane", expected:"Mixed-CRS note; mosaics into Output CRS; temp result auto-deleted on removal/shutdown; \"add to pane\" off ⇒ disk only + temp forced off", covers:"FR-OPS-7/8/9 · cross-CRS-Merge + temp-lifecycle follow-up", tc:"TC-OPS-12/13"}
+ ]},
+ {id:"P10", title:"Phase 10 — Errors, Security & Robustness", frs:"FR-ERR-1…8, FR-SEC-1…6", rows:[
+  {st:"ST-P10-1", steps:"Open DS-BAD malformed raster; open a non-raster file", expected:"Non-fatal user-visible error banner; app stays stable; malformed data contained (no crash)", covers:"FR-ERR-1/6, FR-SEC-4", tc:"—"},
+  {st:"ST-P10-2", steps:"`Ctrl+U` a failing remote (bad host/timeout); then a `file:`/`ftp:` scheme; then DS-BAD blocked URLs (`127.0.0.1`, `169.254.169.254`)", expected:"Fetch failure reported + aborted, stable; non-allowlisted schemes rejected; loopback/link-local/private/metadata hosts blocked pre-fetch", covers:"FR-ERR-2, FR-SEC-2/3", tc:"TC-SEC (UrlGuard)"},
+  {st:"ST-P10-3", steps:"Force a GDAL op failure (e.g. incompatible Warp target)", expected:"Error reported; no partial/invalid output added to layers", covers:"FR-ERR-3", tc:"—"},
+  {st:"ST-P10-4", steps:"Open DS-COG over HTTPS; confirm TLS verification on; check cache dir + a clear cache action; confirm no credentials persisted (env only)", expected:"TLS not downgraded; cache confined to documented dir + clearable; creds env-only", covers:"FR-SEC-1/5/6", tc:"—"},
+  {st:"ST-P10-5", steps:"Load many/large layers to force VRAM pressure; provoke GL context loss (e.g. display sleep / driver reset if feasible)", expected:"Graceful degrade: LRU tile eviction + coarser LOD, no OOM crash; GL-loss detected and context rebuilt (or clear error) — no crash", covers:"FR-ERR-5/7", tc:"TC-76 (byte budget)"},
+  {st:"ST-P10-6", steps:"Trigger several errors of different severity; check the in-app Log + persistent log", expected:"Every error logged with a level to both sinks", covers:"FR-ERR-8, FR-APP-4/12", tc:"—"},
+  {st:"ST-P10-R1", reg:true, steps:"With a reprojection or op failure active (banner shown), close a pane", expected:"No crash; banner behaves; pane-close reassigns layers safely", covers:"FR-ERR-4 · Phase-10 pane-close crash fix", tc:"—"}
+ ]},
+ {id:"P11", title:"Phase 11 — CRS & On-the-fly Reprojection", frs:"FR-CRS-1…8", rows:[
+  {st:"ST-P11-1", steps:"Load DS-BT (UTM) + DS-DEM (4326, same area) into one pane", expected:"Both align in the pane's Project CRS (default = first/bottom raster's CRS); ≤1 px overlay offset", covers:"FR-CRS-1/3 · SDD §6", tc:"TC-CRS-01/03/08"},
+  {st:"ST-P11-2", steps:"Open the Project-CRS picker from the gear menu and the clickable status CRS label; set EPSG:4326 then a WKT; use Use the layer's CRS", expected:"Layers re-display in the new CRS without reload; camera stays over the same ground; status shows CRS + \"↻N reprojected\" badge", covers:"FR-CRS-2 · SDD §6.8", tc:"TC-CRS-02/06"},
+  {st:"ST-P11-3", steps:"While a layer reprojects, watch the notification", expected:"Non-modal auto-dismissing banner names the layer + source→Project transform (marquee if long, ✕ close); reprojection logged", covers:"FR-CRS-6 · non-modal-banner follow-up", tc:"TC-CRS-07"},
+  {st:"ST-P11-4", steps:"With a reprojected layer, `Ctrl`+click to inspect and read the m/px + coordinate", expected:"Inspected value from source pixels (unchanged by reprojection); coordinate bridge maps the click correctly", covers:"FR-CRS-4, FR-ACC-2 · coordinate-bridge fix", tc:"TC-CRS-05"},
+  {st:"ST-P11-5", steps:"Load a layer with a missing/incompatible CRS under a projected pane CRS", expected:"Modal warning; app stable; layer omitted from display with a logged reason", covers:"FR-CRS-5, FR-ERR-4", tc:"TC-CRS-04"},
+  {st:"ST-P11-6", steps:"Enable the basemap; change the pane's Project CRS", expected:"Basemap re-warps pixel-accurately into the new CRS (per-tile tessellation)", covers:"FR-CRS-7, FR-OSM-8", tc:"TC-CRS-10"},
+  {st:"ST-P11-7", steps:"Sync two panes holding different Project CRS; pan one", expected:"Shared camera transformed through geographic → linked panes stay co-located", covers:"FR-CRS-8", tc:"TC-CRS-09"},
+  {st:"ST-P11-R1", reg:true, steps:"Reproject DS-BT UTM→4326; inspect the black/white footprint corners", expected:"Uncovered warp corners are transparent (not opaque black, nor white under an inverted colormap)", covers:"black-corner fix (`-dstalpha` + NaN mask)", tc:"TC-RND-10"},
+  {st:"ST-P11-R2", reg:true, steps:"On a reprojected layer at high zoom, `Ctrl`+click various pixels", expected:"Red highlight sits flush on the displayed warped pixel-block (no ½-cell straddle) for a click anywhere in the block", covers:"warped-cell highlight + ½-pixel (round + raw-edge) fix", tc:"TC-CRS-12"},
+  {st:"ST-P11-R3", reg:true, steps:"In the CRS picker type a partial `EPSG:` / gibberish", expected:"Invalidity shown only inline (status + disabled OK); no red error banner, no GDAL log entry", covers:"silent CRS-picker validation fix", tc:"TC-CRS-11"},
+  {st:"ST-P11-R4", reg:true, steps:"After reprojecting UTM→4326, read the scale bar", expected:"Reads degrees, not \"0.2 m\"", covers:"scalebar native-units fix", tc:"—"}
+ ]},
+ {id:"P12", title:"Phase 12 — Performance Instrumentation & KPIs", frs:"NFR-PERF-1…7, FR-APP-14, FR-CAP-3", rows:[
+  {st:"ST-P12-1", steps:"View → Performance HUD (toggle on)", expected:"A compact bottom-right overlay appears on every pane showing FPS · p99/max frame time · open-latency · stalls · VRAM (clear of the bottom-left scale bar); toggling off removes it", covers:"FR-APP-14 · SDD §11.4", tc:"TC-APP-14"},
+  {st:"ST-P12-2", steps:"With the HUD on, pan/zoom a large raster continuously for ~10 s", expected:"FPS stays interactive (≥ 30 on the Reference Hardware Profile); p99/max update live; no frame is persistently flagged red (>100 ms)", covers:"NFR-PERF-1 (frame timer)", tc:"TC-PERF-01"},
+  {st:"ST-P12-3", steps:"Open a local file and watch the HUD's open-latency; do a heavy op (Warp) and watch stalls", expected:"Open-latency shows first-tiles time (≤ 500 ms local on the RHP); the UI stays responsive and the stall count stays low", covers:"NFR-PERF-2/3 (latency probe + stall detector)", tc:"TC-PERF-02/03"},
+  {st:"ST-P12-4", steps:"Cross-check the HUD's VRAM figure against the GPU Monitor panel during navigation", expected:"HUD VRAM (this pane) is consistent with the GPU Monitor's summed estimate; both stay bounded under a soak", covers:"NFR-PERF-5 (VRAM accounting)", tc:"TC-PERF-05"},
+  {st:"ST-P12-5", steps:"Set two layers in differing Project CRS in one pane and pan (reprojection path)", expected:"Sustained pan ≥ 20 FPS with two reprojected layers, or a visible graceful degrade (coarser LOD)", covers:"NFR-PERF-7 (reprojection overhead)", tc:"TC-PERF-07"},
+  {st:"ST-P12-6", steps:"Open a raster that has a complex band (e.g. a CFloat32 GeoTIFF)", expected:"A log warning states the complex band is shown as its real component only — reported, not silently truncated", covers:"FR-CAP-3", tc:"TC-CAP-03"},
+  {st:"ST-P12-7", reg:true, steps:"Enable the HUD, then capture a screenshot (`Ctrl+Shift+S`)", expected:"The HUD overlay is absent from the captured image (like the pane chrome)", covers:"HUD omitted from grabForExport", tc:"—"}
+ ]},
+ {id:"X", title:"Cross-cutting integration scenario", frs:"integration of phase seams", rows:[
+  {st:"ST-X-1", steps:"Load DS-L8 (UTM) and DS-DEM (4326); switch to Quarter layout; put each in its own pane and set different Project CRS per pane; enable the basemap; Sync two panes as master/slave and pan (ghost cursor + co-location); `Ctrl`+click to inspect across the sync group (source values, flush highlight in every synced pane); run NDVI in Raster Math landing in a New Pane; Export Logs and capture an Entire pane layout screenshot", expected:"Every seam holds — per-pane CRS, reprojected basemap, sync, source-pixel inspect, math output routing, screenshot composite — with no crash and a clean log", covers:"integration of FR-CRS-1/4/8, FR-PNE-8/9/10, FR-OSM-8, FR-MTH-4/8, FR-APP-5/12", tc:"—"}
+ ]}
+];
+
+/* ---- State ---- */
+const KEY = "fv-smoke-v1";
+let state = { theme: document.documentElement.getAttribute("data-theme"), meta:{build:"",tester:"",date:""}, results:{} };
+try { const s = JSON.parse(localStorage.getItem(KEY) || "{}"); state = Object.assign(state, s); state.meta = Object.assign({build:"",tester:"",date:""}, s.meta||{}); state.results = s.results||{}; } catch(e){}
+
+function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){} }
+function fmt(s){ const e = String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); return e.replace(/`([^`]+)`/g,"<code>$1</code>"); }
+
+/* ---- Render phases ---- */
+const ALL_STS = [];
+function render(){
+  const host = document.getElementById("phases");
+  const h2 = document.createElement("h2"); h2.textContent = "Phase-wise smoke tests"; host.appendChild(h2);
+  PHASES.forEach(ph => {
+    const sec = document.createElement("section");
+    sec.className = "phase"; sec.dataset.phase = ph.id;
+    const head = document.createElement("div"); head.className = "head";
+    head.innerHTML = '<span class="caret">▾</span><h3>'+fmt(ph.title)+' <span class="frs">'+fmt(ph.frs)+'</span></h3>'+
+      '<div class="mini"><span class="seg-pass" style="width:0"></span><span class="seg-fail" style="width:0"></span><span class="seg-na" style="width:0"></span></div>'+
+      '<span class="phase-count">0/'+ph.rows.length+'</span>'+
+      '<button class="reset-phase" title="Reset this phase">Reset</button>';
+    sec.appendChild(head);
+    const body = document.createElement("div"); body.className = "body";
+    ph.rows.forEach(r => { ALL_STS.push(r.st); body.appendChild(rowEl(r, ph.id)); });
+    sec.appendChild(body);
+    host.appendChild(sec);
+
+    head.addEventListener("click", e => { if(e.target.closest(".reset-phase")) return; sec.classList.toggle("collapsed"); });
+    head.querySelector(".reset-phase").addEventListener("click", () => {
+      if(!confirm("Reset all marks & notes in "+ph.title+"?")) return;
+      ph.rows.forEach(r => { delete state.results[r.st]; });
+      save(); syncRow(ph); updateProgress();
+    });
+  });
+}
+
+function rowEl(r, phaseId){
+  const cur = state.results[r.st] || {status:null, notes:""};
+  const el = document.createElement("div");
+  el.className = "st"; el.dataset.st = r.st; el.id = r.st;
+  el.innerHTML =
+    '<div class="st-top"><span class="st-id">'+r.st+'</span>'+
+      (r.reg?'<span class="chip reg">Regression</span>':'')+
+      '<span class="chip">TC: '+fmt(r.tc)+'</span></div>'+
+    '<div class="field"><span class="k">Steps</span>'+fmt(r.steps)+'</div>'+
+    '<div class="field"><span class="k">Expected</span>'+fmt(r.expected)+'</div>'+
+    '<div class="field"><span class="k">Covers</span>'+fmt(r.covers)+'</div>'+
+    '<div class="controls">'+
+      '<span class="tri" role="group" aria-label="result">'+
+        '<button class="b-pass" data-v="pass" aria-pressed="false">✓ PASS</button>'+
+        '<button class="b-fail" data-v="fail" aria-pressed="false">✕ FAIL</button>'+
+        '<button class="b-na" data-v="na" aria-pressed="false">— N/A</button>'+
+      '</span>'+
+      '<textarea placeholder="Notes (build, observations, issue link)…"></textarea>'+
+    '</div>';
+  const tri = el.querySelectorAll(".tri button");
+  tri.forEach(b => b.addEventListener("click", () => {
+    const v = b.dataset.v; const s = state.results[r.st] || {status:null,notes:""};
+    s.status = (s.status === v) ? null : v; state.results[r.st] = s; save();
+    paintRow(el, s); updateProgress();
+  }));
+  const ta = el.querySelector("textarea");
+  ta.value = cur.notes || "";
+  let t; ta.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => {
+    const s = state.results[r.st] || {status:null,notes:""}; s.notes = ta.value; state.results[r.st]=s; save();
+  }, 250); });
+  paintRow(el, cur);
+  return el;
+}
+
+function paintRow(el, s){
+  el.classList.remove("mark-pass","mark-fail","mark-na");
+  if(s.status) el.classList.add("mark-"+s.status);
+  el.querySelectorAll(".tri button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === s.status)));
+  el.querySelector(".controls").setAttribute("data-print-status", s.status ? s.status.toUpperCase() : "—");
+}
+
+function syncRow(ph){ // repaint a phase's rows from state (after reset)
+  ph.rows.forEach(r => { const el = document.getElementById(r.st); if(el){ const s = state.results[r.st]||{status:null,notes:""}; el.querySelector("textarea").value = s.notes||""; paintRow(el, s);} });
+}
+
+/* ---- Progress + filter ---- */
+let filter = "all";
+function updateProgress(){
+  let p=0,f=0,n=0,u=0;
+  ALL_STS.forEach(id => { const s=(state.results[id]||{}).status; if(s==="pass")p++;else if(s==="fail")f++;else if(s==="na")n++;else u++; });
+  const total = ALL_STS.length;
+  document.getElementById("c-pass").textContent=p; document.getElementById("c-fail").textContent=f;
+  document.getElementById("c-na").textContent=n; document.getElementById("c-unt").textContent=u;
+  document.getElementById("ov-text").textContent=(p+f+n)+" / "+total+" marked";
+  const bar = document.getElementById("overall-bar");
+  bar.children[0].style.width=(100*p/total)+"%"; bar.children[1].style.width=(100*f/total)+"%"; bar.children[2].style.width=(100*n/total)+"%";
+  // per-phase
+  PHASES.forEach(ph => {
+    const sec = document.querySelector('.phase[data-phase="'+ph.id+'"]'); if(!sec) return;
+    let pp=0,pf=0,pn=0,done=0;
+    ph.rows.forEach(r => { const s=(state.results[r.st]||{}).status; if(s==="pass"){pp++;done++;}else if(s==="fail"){pf++;done++;}else if(s==="na"){pn++;done++;} });
+    const tot=ph.rows.length, mini=sec.querySelector(".mini");
+    mini.children[0].style.width=(100*pp/tot)+"%"; mini.children[1].style.width=(100*pf/tot)+"%"; mini.children[2].style.width=(100*pn/tot)+"%";
+    sec.querySelector(".phase-count").textContent=done+"/"+tot;
+  });
+  applyFilter();
+}
+
+function applyFilter(){
+  PHASES.forEach(ph => {
+    const sec = document.querySelector('.phase[data-phase="'+ph.id+'"]'); if(!sec) return;
+    let visible=0;
+    ph.rows.forEach(r => {
+      const el=document.getElementById(r.st); if(!el) return;
+      const s=(state.results[r.st]||{}).status;
+      let show = filter==="all" || (filter==="untested" && !s) || (filter==="pass" && s==="pass") || (filter==="fail" && s==="fail");
+      el.classList.toggle("hidden", !show); if(show) visible++;
+    });
+    sec.style.display = (filter!=="all" && visible===0) ? "none" : "";
+  });
+}
+
+/* ---- Export / Import ---- */
+function readMeta(){ state.meta.build=document.getElementById("m-build").value; state.meta.tester=document.getElementById("m-tester").value; state.meta.date=document.getElementById("m-date").value; save(); }
+function doExport(){
+  readMeta();
+  const payload = { doc:"FlashViewer Manual Smoke Tests", docVersion:"1.1", tracks:"SRS v2.62 / SDD v1.57", generatedAt:new Date().toISOString(), meta:state.meta, results:state.results };
+  const blob = new Blob([JSON.stringify(payload,null,2)], {type:"application/json"});
+  const a = document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download = "fv-smoke-report-"+(state.meta.date||new Date().toISOString().slice(0,10))+".json";
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
+}
+function doImport(file){
+  const rd = new FileReader();
+  rd.onload = () => { try {
+    const o = JSON.parse(rd.result);
+    if(o.results && typeof o.results==="object"){ state.results = o.results; }
+    if(o.meta){ state.meta = Object.assign(state.meta, o.meta); }
+    save(); hydrate(); updateProgress();
+    alert("Imported run report.");
+  } catch(e){ alert("Invalid report file: "+e.message); } };
+  rd.readAsText(file);
+}
+
+/* ---- Theme ---- */
+function toggleTheme(){
+  const cur = document.documentElement.getAttribute("data-theme")==="dark" ? "light":"dark";
+  document.documentElement.setAttribute("data-theme", cur); state.theme=cur; save();
+}
+
+/* ---- Hydrate inputs + rows from state ---- */
+function hydrate(){
+  document.getElementById("m-build").value=state.meta.build||"";
+  document.getElementById("m-tester").value=state.meta.tester||"";
+  document.getElementById("m-date").value=state.meta.date||"";
+  PHASES.forEach(syncRow);
+}
+
+/* ---- Wire up ---- */
+render();
+hydrate();
+updateProgress();
+document.getElementById("btn-theme").addEventListener("click", toggleTheme);
+document.getElementById("btn-export").addEventListener("click", doExport);
+document.getElementById("btn-import").addEventListener("click", () => document.getElementById("file-import").click());
+document.getElementById("file-import").addEventListener("change", e => { if(e.target.files[0]) doImport(e.target.files[0]); e.target.value=""; });
+document.getElementById("btn-print").addEventListener("click", () => { readMeta(); window.print(); });
+document.getElementById("btn-reset").addEventListener("click", () => { if(confirm("Reset ALL marks & notes across every phase?")){ state.results={}; save(); hydrate(); updateProgress(); } });
+document.getElementById("btn-expand").addEventListener("click", () => document.querySelectorAll(".phase").forEach(p=>p.classList.remove("collapsed")));
+document.getElementById("btn-collapse").addEventListener("click", () => document.querySelectorAll(".phase").forEach(p=>p.classList.add("collapsed")));
+["m-build","m-tester","m-date"].forEach(id => document.getElementById(id).addEventListener("change", readMeta));
+document.querySelectorAll(".filter button").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll(".filter button").forEach(x=>x.classList.remove("active")); b.classList.add("active");
+  filter=b.dataset.filter; applyFilter();
+}));
+</script>
+</body>
+</html>

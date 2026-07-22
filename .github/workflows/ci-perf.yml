@@ -1,0 +1,59 @@
+name: CI Perf (non-gating)
+
+# Phase 12 — Performance Instrumentation & KPIs (NFR-PERF-1…7).
+# A DEDICATED, NON-GATING lane (SDD §11.3): it builds with FV_PERF_INSTRUMENT=ON and
+# runs the perf-labelled tests so the instrumentation stays compilable and the
+# [perf][logic] accounting is exercised. The absolute-threshold KPI cases ([perf][rhp])
+# SKIP here — they are authoritative only on the pinned Reference Hardware Profile
+# (FV_PERF_RHP). continue-on-error keeps CI variance from gating functional builds; the
+# numbers are trended, not asserted, on shared runners.
+
+on:
+  push:
+    branches: [main, "claude/**", "v*-claude"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  perf-lane:
+    runs-on: ubuntu-24.04
+    continue-on-error: true   # non-gating: never fails the overall build
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build pkg-config \
+            qt6-base-dev qt6-base-dev-tools \
+            qt6-charts-dev \
+            qt6-svg-dev \
+            libgdal-dev \
+            libmuparser-dev \
+            libspdlog-dev \
+            nlohmann-json3-dev \
+            libglm-dev \
+            catch2 \
+            libgl-dev \
+            libxkbcommon-dev \
+            xvfb
+
+      - name: Configure (FV_PERF_INSTRUMENT=ON)
+        run: cmake --preset linux-release -DFV_PERF_INSTRUMENT=ON
+
+      - name: Build
+        run: cmake --build build/linux-release --parallel
+
+      - name: Perf tests (headless, trended — non-gating)
+        # Select the perf/CAP cases by name (Catch2 tags aren't exported as CTest
+        # labels by catch_discover_tests). The [perf][rhp] KPI cases SKIP unless
+        # FV_PERF_RHP is set; the [perf][logic] accounting cases assert.
+        run: |
+          cd build/linux-release
+          xvfb-run -a ctest -R "TC-PERF|TC-CAP-03" --output-on-failure

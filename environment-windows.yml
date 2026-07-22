@@ -1,0 +1,34 @@
+name: flashviewer-windows
+channels:
+  - conda-forge
+dependencies:
+  - gdal>=3.8
+  # conda-forge ships GDAL format drivers as separate plugins; libgdal-core alone
+  # has only GTiff/VRT. These add the NetCDF and HDF5 drivers (FR-IO-4).
+  - libgdal-netcdf
+  - libgdal-hdf5
+  - spdlog
+  - nlohmann_json
+  - glm
+  - muparser
+  - catch2>=3
+  - cmake>=3.25
+  - ninja
+
+  # --- Qt (optional, conda-only fallback) ----------------------------------
+  # By DEFAULT on Windows, Qt is NOT taken from conda. It is installed via
+  # aqtinstall (win64_msvc2019_64 + the qtcharts module) — see ci-windows.yml
+  # and INSTALL.md §2.5.2. That gives the project-pinned Qt 6.6.3 built for the
+  # MSVC ABI, matching the compiler. Keep the qt6-* lines below COMMENTED for the
+  # standard "conda deps + aqt Qt" build.
+  #
+  # Uncomment them ONLY as a fallback to build Qt entirely from conda-forge —
+  # e.g. when aqtinstall is unavailable or blocked on your network. Trade-offs:
+  #   * conda-forge Qt is 6.11.x, NOT the project-pinned 6.6.3 (>=6.4 still holds);
+  #   * verify it links against MSVC on your machine.
+  # When uncommented: drop the aqt step and configure with CMAKE_PREFIX_PATH set
+  # to just "$env:CONDA_PREFIX/Library" (no Qt path).
+  #
+  # - qt6-main
+  # - qt6-charts
+  # - qt6-svg

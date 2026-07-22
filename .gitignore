@@ -1,0 +1,50 @@
+# Build directories
+build/
+.cmake/
+
+# IDE
+.vscode/
+.clangd/
+*.user
+*.pro.user
+.idea/
+
+# Compiled objects
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+
+# Qt generated
+*_autogen/
+*.moc
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+DartConfiguration.tcl
+install_manifest.txt
+*.ninja
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated headers
+generated/
+
+# Docs
+.claude
+docs/SDD.md
+docs/SRS.md
+docs/TEST_SPEC.md
+docs/FLASHVIEWER_REVAMP_PLAN.md
+docs/CRITICAL_REVIEW_SRS.md
+docs/SRS_REVISE_PLAN.md

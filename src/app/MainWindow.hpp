@@ -1,0 +1,187 @@
+#pragma once
+#include <QMainWindow>
+#include <QVector>
+#include <QStringList>
+#include <QByteArray>
+#include <QPixmap>
+#include "app/Settings.hpp"
+#include "panels/NoDataWidget.hpp"
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
+class MapCanvas;
+class PaneLayout;
+class LayerManager;
+class QPlainTextEdit;
+class QLabel;
+class QFrame;
+class QTimer;
+class QDockWidget;
+class QMenu;
+class QAction;
+class GpuMonitorPanel;
+class MarqueeLabel;
+class LayerPanel;
+class HistogramPanel;
+class BandSelectorWidget;
+class ColormapSelectorWidget;
+class RasterInfoPanel;
+class AttributeInspector;
+class RasterLayer;
+class RasterDataset;
+class SpectralPlotWindow;
+class ScanPixProfileWindow;
+
+class MainWindow : public QMainWindow {
+    Q_OBJECT
+public:
+    explicit MainWindow(QWidget* parent = nullptr);
+    ~MainWindow() override;
+
+    void openFiles(const QStringList& paths);
+
+public slots:
+    void onThemeChanged(Theme t);
+
+protected:
+    void closeEvent(QCloseEvent* event) override;
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
+    // Click on the status-bar CRS label → open the Project-CRS picker (Phase 11).
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
+    // Shutdown disposal (any graceful exit path): delete every managed temp result file, after
+    // releasing the layers' datasets (GDALClose) so the files are removable. Runs at most once.
+    void disposeTempFiles();
+
+private slots:
+    void onActiveLayerChanged(int index);
+    MapCanvas* addPane();
+    void removeActivePane();
+    void appendLog(int level, const QString& text);
+    void exportLogs();                              // FR-APP-10 (Export Logs)
+    void showErrorBanner(int level, const QString& text);  // FR-ERR-8 non-fatal banner
+    void applyBannerStyle(int level);   // theme-compliant per-level bg/fg (contrast-safe)
+    void captureScreenshot();
+    QPixmap grabLayoutComposite();   // whole-layout screenshot: front pane per region (Phase 7)
+
+private:
+    void setupMenuBar();
+    void setupToolBar();
+    void setupDocks();
+    void setupStatusBar();
+    void restoreLayout();
+    void refreshLayerProperties(RasterLayer* layer);
+    MapCanvas* activeCanvas() const;
+    // Phase 6: each pane's colormap legend is bound to that pane's OWN layer (the
+    // active layer if it lives in the pane, else the pane's topmost raster, else
+    // cleared) — independent of which pane is currently active.
+    void       updatePaneLegends();
+    int        topLayerIndexInPane(uint64_t paneId) const;
+    // Pane gear-menu actions (Phase 6.1 / 6.2).
+    void       closePane(MapCanvas* canvas);
+    void       renamePane(MapCanvas* canvas);
+    void       colorPane(MapCanvas* canvas);
+    // Phase 6.3: move a layer to a pane (drag-drop or "To Pane" menu) + refresh views.
+    void       assignLayerToPane(int layerIndex, uint64_t paneId);
+    // Phase 6.6: pixel-inspect scoped to the clicked pane — aggregates across its sync group
+    // when synced. allLayers=false → each pane's representative/active layer; true → all
+    // visible rasters per pane.
+    void       inspectFromPane(MapCanvas* clicked, double geo_x, double geo_y, bool allLayers);
+    // Phase 6: the pane that newly-opened layers are assigned to / that menu
+    // camera actions act on. Updated when a canvas is clicked.
+    uint64_t   activePaneId() const;
+    // Authoritative Project CRS (WKT) for a pane, read from its canvas (Phase 11). Empty
+    // ⇒ geographic. Replaces the ad-hoc bottom-raster scans in the Tools dialogs.
+    QString    paneProjectCrs(uint64_t paneId) const;
+    // Refresh the status-bar CRS readout from the active pane's Project CRS + reprojected
+    // layer count (Phase 11, FR-GIS-4).
+    void       updateProjectCrsStatus();
+    // Open the Project-CRS picker for a pane (gear-menu / clickable status label, Phase 11).
+    void       openProjectCrsPicker(MapCanvas* canvas);
+    // selectTopLayer: on a pane change, also make the pane's topmost layer active (for a
+    // canvas click). Pass false when the activation is driven by a layer selection, so the
+    // already-selected layer stays active (Phase 6.3 fix).
+    void       setActivePane(int idx, bool selectTopLayer = true);
+    // Connect a pane's per-canvas signals (cursor/zoom/inspect/activation) so the
+    // status bar and inspector follow whichever pane the user interacts with.
+    void       wireCanvasSignals(MapCanvas* canvas);
+
+    // View → Panels: re-open closed docks at their fresh-build location (FR-APP-9).
+    // A dock tracked with its default area + tab partner so it can be restored exactly.
+    struct DockEntry {
+        QDockWidget*       dock{nullptr};
+        Qt::DockWidgetArea area{Qt::LeftDockWidgetArea};
+        QDockWidget*       tabWith{nullptr};   // re-tab partner, or nullptr
+        QAction*           action{nullptr};    // its checkable menu item
+    };
+    void buildPanelsMenu();
+    void reopenDockToDefault(const DockEntry& e);
+
+    QList<int> showSubdatasetMultiPicker(
+        const QString& path,
+        const std::vector<std::pair<std::string,std::string>>& subs);
+
+    // Shows the NetCDF coordinate assignment dialog when a subdataset opens with
+    // identity geotransform. Returns nullopt when user clicks Skip.
+    struct AssignedCoords { double gt[6]; std::string crs_wkt; };
+    std::optional<AssignedCoords> showNetCdfAssignDialog(
+        const QString& displayPath,
+        const std::string& parentPath,
+        const std::shared_ptr<RasterDataset>& ds,
+        const std::vector<std::pair<std::string,std::string>>& subs);
+
+    PaneLayout*            m_pane_layout{nullptr};
+    LayerManager*          m_layer_mgr{nullptr};  // single app-wide layer model (Phase 6)
+    MapCanvas*             m_canvas{nullptr};  // the active pane's canvas
+    QPlainTextEdit*        m_log_widget{nullptr};
+    // Non-fatal error banner (FR-ERR-8): shown above the pane layout on a
+    // warn/error report from ErrorReporter, auto-hidden after a few seconds.
+    QFrame*                m_error_banner{nullptr};
+    MarqueeLabel*          m_error_banner_label{nullptr};
+    QTimer*                m_banner_timer{nullptr};
+    int                    m_banner_level{0};   // last shown level, for live theme re-style
+    // GPU Monitor dock (FR-APP-11): live estimated-VRAM sparkline + poll timer.
+    GpuMonitorPanel*       m_gpu_monitor{nullptr};
+    QTimer*                m_gpu_timer{nullptr};
+    // Main-thread stall detector (NFR-PERF-2, Phase 12): a UI-loop watchdog + its clock.
+    QTimer*                m_stall_timer{nullptr};
+    QLabel*                m_coord_label{nullptr};
+    QLabel*                m_zoom_label{nullptr};
+    QLabel*                m_crs_label{nullptr};
+    QLabel*                m_pixel_label{nullptr};
+
+    LayerPanel*            m_layer_panel{nullptr};
+    HistogramPanel*        m_histo_panel{nullptr};
+    BandSelectorWidget*    m_band_sel{nullptr};
+    ColormapSelectorWidget* m_cm_sel{nullptr};
+    RasterInfoPanel*       m_info_panel{nullptr};
+    NoDataWidget*          m_nodata_widget{nullptr};
+    AttributeInspector*    m_attr_insp{nullptr};
+
+    // View → Display Resampling (FR-RND-10): radio group + the 3 mode actions,
+    // kept so onActiveLayerChanged can reflect the active layer's current mode.
+    QActionGroup*          m_resample_group{nullptr};
+    QAction*               m_resample_acts[3]{nullptr, nullptr, nullptr};
+
+    // View → Panels (FR-APP-9): tracked docks + pristine default layout snapshot.
+    QVector<DockEntry>     m_docks;
+    QByteArray             m_default_layout_state;
+    QMenu*                 m_panels_menu{nullptr};
+
+    struct LogEntry { int level; QString text; };
+    QVector<LogEntry>      m_log_entries;
+    void                   renderLogEntry(int level, const QString& text);
+
+    int                    m_active_pane_idx{0};
+
+    // Managed temp result files captured in layerAboutToBeRemoved (layer still live) and
+    // deleted in layerRemoved (after GDALClose). See util/TempFile.hpp / RasterLayer::ownsTempFile.
+    QStringList            m_pending_temp_deletions;
+    bool                   m_temp_disposed{false};   // disposeTempFiles() runs once
+
+    SpectralPlotWindow*    m_spectral_window{nullptr};
+    ScanPixProfileWindow*  m_profile_window{nullptr};
+};

@@ -1,0 +1,47 @@
+name: CI macOS (conda)
+
+# Optional, secondary build path: builds FlashViewer on macOS entirely from
+# conda-forge (deps + Qt6), with no Homebrew dependencies. Verification only
+# (build + test) — the native lane (ci-macos.yml) owns the DMG artifact.
+
+on:
+  push:
+    branches: [main, "claude/**", "v*-claude"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-and-test:
+    runs-on: macos-latest   # Apple Silicon (osx-arm64); conda picks the matching arch
+
+    defaults:
+      run:
+        # Login shell so the conda env activated by setup-miniconda persists
+        # across steps (no explicit `conda activate` needed).
+        shell: bash -el {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup conda environment
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          environment-file: environment-macos.yml
+          activate-environment: flashviewer-macos
+          auto-activate-base: false
+
+      - name: Configure
+        run: cmake --preset macos-release -DCMAKE_PREFIX_PATH="$CONDA_PREFIX"
+
+      - name: Build
+        run: cmake --build build/macos-release --parallel
+
+      - name: Test (headless)
+        run: |
+          cd build/macos-release
+          QT_QPA_PLATFORM=offscreen ctest --output-on-failure
