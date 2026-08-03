@@ -13,6 +13,7 @@
 #include "io/DatasetFactory.hpp"
 #include "io/BinaryImportDialog.hpp"
 #include "io/BinaryRasterParser.hpp"
+#include "io/BandStackVrt.hpp"
 #include "io/CloudReader.hpp"
 #include "io/UrlGuard.hpp"
 #include "util/Logger.hpp"
@@ -73,6 +74,9 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QDialogButtonBox>
+#include <QGroupBox>
+#include <QRadioButton>
+#include <QDateTime>
 #include <spdlog/spdlog.h>
 #include <algorithm>
 
@@ -179,6 +183,20 @@ MainWindow::MainWindow(QWidget* parent)
         if (target) assignLayerToPane(layerIndex, target);
     });
 
+    // A layer dropped onto a region PILL names its target pane explicitly, so it works even
+    // when that pane is stacked BEHIND the displayed one — the drop path that makes issue #1
+    // resolvable in Full-Window mode. The target is then brought forward so the move is
+    // visible (this is an explicit user gesture, unlike a layer-row selection).
+    connect(m_pane_layout, &PaneLayout::layerDroppedOnPane, this,
+            [this](int layerIndex, uint64_t paneId) {
+        assignLayerToPane(layerIndex, paneId);
+        for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+            if (m_pane_layout->paneId(i) == paneId) {
+                setActivePane(i, /*selectTopLayer=*/false, /*bringToFront=*/true);
+                break;
+            }
+    });
+
     // Allow docking to the upper/lower half (or full) of a side area, not just
     // tab/replace, so a dragged panel snaps into split positions (FR-APP-10).
     setDockNestingEnabled(true);
@@ -281,8 +299,23 @@ void MainWindow::openFiles(const QStringList& paths) {
         if (DatasetFactory::isMultiVariableFormat(stdPath)) {
             auto subs = DatasetFactory::listSubdatasets(stdPath);
             if (!subs.empty()) {
-                QList<int> selected = showSubdatasetMultiPicker(path, subs);
+                SubdatasetChoice choice = showSubdatasetMultiPicker(path, subs);
+                const QList<int>& selected = choice.indices;
                 if (selected.isEmpty()) continue;
+
+                // "Combine into one multi-band layer" (FR-IO-13): stack the selected
+                // variables into a single N-band layer. On an incompatible grid or a
+                // VRT-build failure this reports why and falls through to the
+                // one-layer-per-variable path below, so the load never dead-ends.
+                if (choice.combine && selected.size() > 1 &&
+                    loadCombinedSubdatasets(path, stdPath, subs, selected)) {
+                    statusBar()->showMessage(
+                        tr("Loaded %1 variable(s) from %2 as one multi-band layer")
+                            .arg(selected.size())
+                            .arg(QFileInfo(path).fileName()), 4000);
+                    continue;
+                }
+
                 for (int idx : selected) {
                     auto sub_ds = DatasetFactory::openSubdataset(
                         subs[static_cast<size_t>(idx)].first);
@@ -350,7 +383,7 @@ void MainWindow::openFiles(const QStringList& paths) {
     }
 }
 
-QList<int> MainWindow::showSubdatasetMultiPicker(
+MainWindow::SubdatasetChoice MainWindow::showSubdatasetMultiPicker(
     const QString& path,
     const std::vector<std::pair<std::string,std::string>>& subs)
 {
@@ -367,6 +400,33 @@ QList<int> MainWindow::showSubdatasetMultiPicker(
         list->addItem(QString::fromStdString(desc.empty() ? name : desc));
     if (list->count() > 0) list->setCurrentRow(0);
     lay->addWidget(list);
+
+    // Load mode (FR-IO-13). "Separate" is the historical behaviour and stays the
+    // default; "Combine" stacks the picked variables into one N-band layer so they can
+    // be driven as an RGB composite from the Band Selector.
+    auto* modeBox   = new QGroupBox(tr("Load as"), &dlg);
+    auto* modeLay   = new QVBoxLayout(modeBox);
+    auto* rbSep     = new QRadioButton(tr("Separate layers (one per variable)"), modeBox);
+    auto* rbCombine = new QRadioButton(
+        tr("One multi-band layer (enables RGB display)"), modeBox);
+    rbSep->setChecked(true);
+    rbCombine->setToolTip(
+        tr("Stacks the selected variables as bands of a single layer.\n"
+           "Requires them to share raster size, grid, and CRS; otherwise\n"
+           "they are loaded as separate layers."));
+    modeLay->addWidget(rbSep);
+    modeLay->addWidget(rbCombine);
+    lay->addWidget(modeBox);
+
+    // Combining a single variable is a no-op — keep the option off until 2+ are picked.
+    auto syncCombineEnabled = [&] {
+        const bool multi = list->selectedItems().size() > 1;
+        rbCombine->setEnabled(multi);
+        if (!multi) rbSep->setChecked(true);
+    };
+    connect(list, &QListWidget::itemSelectionChanged, &dlg, syncCombineEnabled);
+    syncCombineEnabled();
+
     auto* btns = new QDialogButtonBox(
         QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
     connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
@@ -374,10 +434,88 @@ QList<int> MainWindow::showSubdatasetMultiPicker(
     lay->addWidget(btns);
 
     if (dlg.exec() != QDialog::Accepted) return {};
-    QList<int> result;
+    SubdatasetChoice choice;
     for (auto* item : list->selectedItems())
-        result << list->row(item);
-    return result;
+        choice.indices << list->row(item);
+    std::sort(choice.indices.begin(), choice.indices.end());   // stack in list order
+    choice.combine = rbCombine->isChecked();
+    return choice;
+}
+
+bool MainWindow::loadCombinedSubdatasets(
+    const QString& path,
+    const std::string& stdPath,
+    const std::vector<std::pair<std::string,std::string>>& subs,
+    const QList<int>& indices)
+{
+    std::vector<BandStackSource> sources;
+    std::vector<std::string>     paths;
+    sources.reserve(static_cast<size_t>(indices.size()));
+    paths.reserve(static_cast<size_t>(indices.size()));
+    for (int idx : indices) {
+        const std::string& gdal_path = subs[static_cast<size_t>(idx)].first;
+        paths.push_back(gdal_path);
+        sources.push_back({gdal_path,
+                           DatasetFactory::extractVarName(gdal_path).toStdString()});
+    }
+
+    // Grid guard: mismatched variables would stack onto a union extent with
+    // misregistered bands, so report and let the caller load them separately.
+    const BandStackCompat compat = fvCheckBandStackCompatible(paths);
+    if (!compat.ok) {
+        ErrorReporter::instance().report(3, tr("Open"),
+            tr("Cannot combine variables: %1. Loading them as separate layers instead.")
+                .arg(QString::fromStdString(compat.reason)));
+        return false;
+    }
+
+    // The stack VRT is a managed temp file: tagged ownsTempFile so the existing
+    // layer-removal reaper deletes it when the layer goes away (FR-OPS-8).
+    const QString vrt_path = QDir(QDir::tempPath()).filePath(
+        QStringLiteral("fv_stack_%1_%2.vrt")
+            .arg(QFileInfo(path).completeBaseName())
+            .arg(QDateTime::currentMSecsSinceEpoch()));
+    if (fvBuildBandStackVrt(sources, vrt_path.toStdString()).empty()) {
+        ErrorReporter::instance().report(3, tr("Open"),
+            tr("Could not build a combined multi-band layer for %1. "
+               "Loading the variables as separate layers instead.")
+                .arg(QFileInfo(path).fileName()));
+        return false;
+    }
+
+    auto ds = DatasetFactory::open(vrt_path.toStdString());
+    if (!ds) {
+        fvRemoveTempFile(vrt_path);
+        ErrorReporter::instance().report(3, tr("Open"),
+            tr("Could not open the combined multi-band layer for %1. "
+               "Loading the variables as separate layers instead.")
+                .arg(QFileInfo(path).fileName()));
+        return false;
+    }
+
+    // Same identity-geotransform escape hatch as the per-variable path: a non-CF file
+    // stacks into a VRT that is equally unreferenced, so offer coordinate assignment
+    // once for the whole stack (all bands share one grid by construction).
+    if (ds->isGeoTransformIdentity()) {
+        if (auto coords = showNetCdfAssignDialog(path, stdPath, ds, subs)) {
+            ds->setGeoTransformOverride(coords->gt);
+            if (!coords->crs_wkt.empty()) ds->setCrsOverride(coords->crs_wkt);
+        }
+    }
+
+    auto layer = std::make_shared<RasterLayer>(ds);
+    layer->setOwnsTempFile(true);
+    // Name it after the source file + variable count, not the temp VRT (the full temp
+    // path is still visible in the Layer Info panel's File row).
+    layer->setName(tr("%1 (%2 variables)")
+                       .arg(QFileInfo(path).fileName())
+                       .arg(indices.size()));
+    layer->setPaneId(activePaneId());
+    PerfMetrics::instance().markOpenStart(layer->layerId());   // NFR-PERF-3/4
+    m_layer_mgr->addLayer(layer);
+    FV_INFO("Loaded {} variable(s) from '{}' as one {}-band layer",
+            indices.size(), stdPath, ds->bandCount());
+    return true;
 }
 
 std::optional<MainWindow::AssignedCoords> MainWindow::showNetCdfAssignDialog(
@@ -574,7 +712,7 @@ void MainWindow::setupMenuBar() {
     // menu). Pane removal moved to the per-pane gear menu, so no "Remove Pane" here.
     auto* actAddPane = viewMenu->addAction(tr("&New Pane"));
     actAddPane->setShortcut(QKeySequence("Ctrl+Shift+N"));
-    connect(actAddPane, &QAction::triggered, this, &MainWindow::addPane);
+    connect(actAddPane, &QAction::triggered, this, &MainWindow::addPaneInteractive);
 
     // ---- Pane Layout (FR-PNE-8): Full / Half-H / Half-V / Quarter, radio-exclusive ----
     auto* layoutMenu = viewMenu->addMenu(tr("Pane &Layout"));
@@ -736,7 +874,7 @@ void MainWindow::setupToolBar() {
     // shortcut — don't set it here too, or the two actions form an ambiguous shortcut).
     auto* actNewPane = new QAction(tr("New Pane"), this);
     actNewPane->setToolTip(tr("Add a new pane (Ctrl+Shift+N)"));
-    connect(actNewPane, &QAction::triggered, this, &MainWindow::addPane);
+    connect(actNewPane, &QAction::triggered, this, &MainWindow::addPaneInteractive);
     toolbar->addAction(actNewPane);
 
     toolbar->addSeparator();
@@ -781,6 +919,37 @@ void MainWindow::setupDocks() {
             this, [this](int layerIndex, quint64 paneId) {
                 assignLayerToPane(layerIndex, paneId);
             });
+    // --- Phase 18: pane groups, multi-select and the ribbon-drag fix ---
+    // Closing a pane from the Layers panel reuses the canvas gear-menu path, so the
+    // "cannot drop below one pane" rule and the layer-reassignment are honoured (#8).
+    connect(m_layer_panel, &LayerPanel::paneCloseRequested, this, [this](quint64 pid) {
+        for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+            if (m_pane_layout->paneId(i) == pid) { closePane(m_pane_layout->paneCanvas(i)); break; }
+        m_layer_panel->refreshPanes();
+    });
+    // Double-click / "Show This Pane": the deliberate gesture that promotes a pane to the
+    // front of its stacked region (#1b) — the counterpart of the single-click that must not.
+    connect(m_layer_panel, &LayerPanel::paneFocusRequested, this, [this](quint64 pid) {
+        for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+            if (m_pane_layout->paneId(i) == pid) {
+                setActivePane(i, /*selectTopLayer=*/false, /*bringToFront=*/true);
+                break;
+            }
+    });
+    // A drag out of the Layers panel freezes region re-stacking for its duration (#1).
+    connect(m_layer_panel, &LayerPanel::dragActiveChanged,
+            this, [this](bool active) { m_layer_drag_active = active; });
+    // >1 layer selected ⇒ no single subject: blank the per-layer panels, exactly as when no
+    // image is loaded. Dropping back to ≤1 restores them from the active layer (#8).
+    connect(m_layer_panel, &LayerPanel::selectionSummaryChanged,
+            this, [this](int layerCount, int) {
+        const bool multi = layerCount > 1;
+        if (multi == m_multi_select) return;
+        m_multi_select = multi;
+        if (m_histo_panel) m_histo_panel->setSuppressed(multi);
+        if (m_info_panel)  m_info_panel->setSuppressed(multi);
+        onActiveLayerChanged(m_layer_mgr->activeIndex());
+    });
     layerDock->setWidget(m_layer_panel);
     addDockWidget(Qt::LeftDockWidgetArea, layerDock);
 
@@ -923,7 +1092,14 @@ void MainWindow::setupDocks() {
         auto l = m_layer_mgr->layerAt(idx);
         if (!l) return;
         for (int i = 0; i < m_pane_layout->paneCount(); ++i)
-            if (m_pane_layout->paneId(i) == l->paneId()) { setActivePane(i, false); break; }
+            if (m_pane_layout->paneId(i) == l->paneId()) {
+                // bringToFront=false (Phase 18 #1): selecting a layer marks its pane active
+                // (border + panel state) but must NOT re-stack the region — otherwise a
+                // press on a Pane-1 row would pull Pane 1 in front of Pane 2 and the pane
+                // the user was about to drop onto would vanish before the drag begins.
+                setActivePane(i, false, false);
+                break;
+            }
     });
     // New raster layers inherit the persisted display-resampling default (FR-RND-10).
     connect(m_layer_mgr, &LayerManager::layerAdded,
@@ -1183,7 +1359,7 @@ QString MainWindow::paneProjectCrs(uint64_t paneId) const {
     return {};
 }
 
-void MainWindow::setActivePane(int idx, bool selectTopLayer) {
+void MainWindow::setActivePane(int idx, bool selectTopLayer, bool bringToFront) {
     if (idx < 0 || idx >= m_pane_layout->paneCount()) return;
     const bool paneChanged = (idx != m_active_pane_idx);
     m_active_pane_idx = idx;
@@ -1198,7 +1374,11 @@ void MainWindow::setActivePane(int idx, bool selectTopLayer) {
 
     // Keep the active pane visible: if it is stacked behind others in its region, bring
     // it to the front (Phase 6.4). showPaneInRegion does not re-emit activation.
-    m_pane_layout->showPaneInRegion(m_pane_layout->paneId(idx));
+    // Skipped for layer-selection-driven activation and while a layer drag from the Layers
+    // panel is in flight — re-stacking a region there would hide the user's drop target
+    // before the drop lands (Phase 18 #1).
+    if (bringToFront && !m_layer_drag_active)
+        m_pane_layout->showPaneInRegion(m_pane_layout->paneId(idx));
 
     // On switching to a different pane, make that pane's topmost layer the active
     // layer: highlights it in the Layers panel and drives the property panels
@@ -1299,6 +1479,8 @@ void MainWindow::wireCanvasSignals(MapCanvas* canvas) {
     connect(canvas, &MapCanvas::paneCrsRequested, this, [this, canvas] {
         openProjectCrsPicker(canvas);
     });
+    // Per-pane "Show Colorbar" toggled (Phase 16 #5): re-evaluate which layer's legend shows.
+    connect(canvas, &MapCanvas::colorbarVisibilityChanged, this, [this] { updatePaneLegends(); });
     // On-the-fly reprojection notice → non-modal banner (Phase 11, FR-CRS-6): amber for the
     // informational notice, red/error styling when a layer was omitted (failed).
     connect(canvas, &MapCanvas::reprojectionNotice, this, [this](const QString& msg, bool failed) {
@@ -1322,7 +1504,16 @@ void MainWindow::assignLayerToPane(int layerIndex, uint64_t paneId) {
     MapCanvas* target = nullptr;
     for (int i = 0; i < m_pane_layout->paneCount(); ++i)
         if (m_pane_layout->paneId(i) == paneId) { target = m_pane_layout->paneCanvas(i); break; }
-    if (target && targetCount == 0) target->fitToLayers();
+    if (target && targetCount == 0) {
+        // Phase 17 #4: an empty pane adopts the dropped layer's CRS (FR-CRS-3), then fits to
+        // it. Derive the CRS BEFORE fitting so the camera is fitted in the new CRS rather
+        // than reprojected afterwards (mirrors the layerAdded handler). refreshDerivedProjectCrs
+        // is a no-op if the user has pinned this pane's CRS, and fires for NetCDF/HDF layers
+        // too (their CRS is on the dataset by the time the layer exists). A NON-empty pane
+        // keeps its CRS and reprojects/native-falls-back the dropped layer (TileRenderer).
+        target->refreshDerivedProjectCrs();
+        target->fitToLayers();
+    }
 
     // Layer leaves its source pane and appears on the target — refresh every canvas, the
     // per-pane legends, and the Layers-panel colour-coding.
@@ -1333,8 +1524,21 @@ void MainWindow::assignLayerToPane(int layerIndex, uint64_t paneId) {
     FV_INFO("Layer {} reassigned to pane id {}", layerIndex, paneId);
 }
 
-MapCanvas* MainWindow::addPane() {
-    auto* canvas = m_pane_layout->addPane(false);   // not auto-synced (Phase 6, point 13)
+void MainWindow::addPaneInteractive() {
+    // Ask for the name before creating the pane, pre-filled with the default the pane would
+    // get anyway ("Pane N", N one past the highest number currently on the canvas — so a
+    // closed Pane 2 frees that name again). Cancel aborts; a blank entry takes the default.
+    bool ok = false;
+    const QString suggested = m_pane_layout->nextPaneLabel();
+    const QString name = QInputDialog::getText(this, tr("New Pane"), tr("Pane name:"),
+                                               QLineEdit::Normal, suggested, &ok);
+    if (!ok) return;
+    addPane(name.trimmed().isEmpty() ? suggested : name.trimmed());
+}
+
+MapCanvas* MainWindow::addPane(const QString& label) {
+    // not auto-synced (Phase 6, point 13); empty label ⇒ PaneLayout's default
+    auto* canvas = m_pane_layout->addPane(false, label);
     wireCanvasSignals(canvas);
     // Inherit the current basemap + inspect mode + Performance HUD so the new pane
     // matches the others.
@@ -1348,11 +1552,13 @@ MapCanvas* MainWindow::addPane() {
         canvas->setDarkBackground(app->currentTheme() == Theme::Dark);
     const int newIdx = m_pane_layout->paneCount() - 1;
     canvas->setPaneLabel(m_pane_layout->paneLabel(newIdx));
-    // Theme-aware, distinct colour for the new pane. Pass the pane index (not idx-1) so
-    // palette[0] isn't a near-duplicate of the default pane's accent blue. FR-PNE-6/7.
+    // Theme-aware colour for the new pane, chosen against the colours CURRENTLY on the canvas
+    // rather than the pane's index — closing a pane must free its colour instead of shifting
+    // the sequence, so no two live panes ever share one (FR-PNE-7). The near-duplicate test
+    // inside fvNextPaneColor also keeps palette[0] away from the default pane's accent blue.
     const bool dark = qobject_cast<Application*>(qApp)
                           ? qobject_cast<Application*>(qApp)->currentTheme() == Theme::Dark : true;
-    const QColor paneCol = fvPaneColor(newIdx, dark);
+    const QColor paneCol = m_pane_layout->nextPaneColor(dark);
     m_pane_layout->setPaneColor(newIdx, paneCol);
     canvas->setPaneColor(paneCol);   // border + ID label
     if (m_layer_panel) m_layer_panel->refreshPaneColors();
@@ -1430,6 +1636,7 @@ void MainWindow::renamePane(MapCanvas* canvas) {
     if (!ok || name.isEmpty()) return;
     m_pane_layout->setPaneLabel(idx, name);
     canvas->setPaneLabel(name);
+    if (m_layer_panel) m_layer_panel->refreshPanes();   // group header shows the pane label
 }
 
 void MainWindow::colorPane(MapCanvas* canvas) {
@@ -1450,6 +1657,7 @@ void MainWindow::removeActivePane() {
     if (m_pane_layout->paneCount() <= 1) return;
     m_pane_layout->removePane(m_active_pane_idx);
     setActivePane(std::max(0, m_active_pane_idx - 1));
+    if (m_layer_panel) m_layer_panel->refreshPanes();   // drop the removed pane's group
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
@@ -1568,20 +1776,27 @@ void MainWindow::inspectFromPane(MapCanvas* clicked, double gx, double gy, bool 
 
 void MainWindow::updatePaneLegends() {
     if (!m_layer_mgr || !m_pane_layout) return;
-    auto active = m_layer_mgr->activeLayer();
     for (int i = 0; i < m_pane_layout->paneCount(); ++i) {
         auto* c = m_pane_layout->paneCanvas(i);
         if (!c) continue;
-        const uint64_t pid = m_pane_layout->paneId(i);
-        std::shared_ptr<Layer> chosen;
-        // Prefer the active layer if it belongs to this pane; else the pane's topmost.
-        if (active && active->type() == LayerType::Raster && active->paneId() == pid)
-            chosen = active;
-        else
-            chosen = m_layer_mgr->layerAt(topLayerIndexInPane(pid));
-        RasterLayer* rl = (chosen && chosen->type() == LayerType::Raster)
-                              ? static_cast<RasterLayer*>(chosen.get()) : nullptr;
-        c->colormapLegend()->setLayer(rl);   // nullptr hides the legend (empty pane)
+        RasterLayer* rl = nullptr;
+        // The colorbar is decoupled from the active layer (Phase 16 #5): it represents the
+        // TOPMOST VISIBLE layer in the pane — i.e. the topmost raster that is visible AND has
+        // opacity > 0 AND is grayscale (RGB composites have no colorbar). A per-pane "Show
+        // Colorbar" gear toggle is the master gate; when off, the legend never shows. When all
+        // layers in a pane are hidden/opacity-0, no candidate is found and the legend hides.
+        if (c->colorbarVisible()) {
+            const uint64_t pid = m_pane_layout->paneId(i);
+            for (int j = 0; j < m_layer_mgr->count(); ++j) {   // list order is top→bottom
+                auto l = m_layer_mgr->layerAt(j);
+                if (!l || l->paneId() != pid) continue;
+                if (!l->visible() || l->opacity() <= 0.0f) continue;
+                if (l->type() != LayerType::Raster) continue;
+                auto* cand = static_cast<RasterLayer*>(l.get());
+                if (cand->bandMapping().isGrayscale()) { rl = cand; break; }
+            }
+        }
+        c->colormapLegend()->setLayer(rl);   // nullptr hides the legend
     }
 }
 
@@ -1591,6 +1806,9 @@ void MainWindow::onActiveLayerChanged(int index) {
     RasterLayer* rl = nullptr;
     if (layerPtr && layerPtr->type() == LayerType::Raster)
         rl = static_cast<RasterLayer*>(layerPtr.get());
+    // Phase 18 #8: a multi-selection has no single subject — the per-layer property widgets
+    // show the same empty state as with no image loaded.
+    if (m_multi_select) rl = nullptr;
     refreshLayerProperties(rl);
     updatePaneLegends();
 

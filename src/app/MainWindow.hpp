@@ -58,7 +58,12 @@ protected:
 
 private slots:
     void onActiveLayerChanged(int index);
-    MapCanvas* addPane();
+    // `label` empty ⇒ the auto default ("Pane N", N one past the highest number in use).
+    MapCanvas* addPane(const QString& label = QString());
+    // View → New Pane / toolbar: ask for the new pane's name (pre-filled with the default)
+    // before creating it. Panes created implicitly (a layer dropped on an empty region, a
+    // Tools dialog's "New Pane" output) skip the prompt and take the default.
+    void       addPaneInteractive();
     void removeActivePane();
     void appendLog(int level, const QString& text);
     void exportLogs();                              // FR-APP-10 (Export Logs)
@@ -104,7 +109,12 @@ private:
     // selectTopLayer: on a pane change, also make the pane's topmost layer active (for a
     // canvas click). Pass false when the activation is driven by a layer selection, so the
     // already-selected layer stays active (Phase 6.3 fix).
-    void       setActivePane(int idx, bool selectTopLayer = true);
+    // bringToFront: also raise the pane to the front of its STACKED region. Pass false for
+    // layer-selection-driven activation — otherwise merely clicking a Pane-1 layer row would
+    // swap Pane 1 in front of Pane 2 and destroy the drop target the user was aiming at
+    // (Phase 18 #1). Explicit gestures (pill click, canvas click, double-click a layer row)
+    // keep true.
+    void       setActivePane(int idx, bool selectTopLayer = true, bool bringToFront = true);
     // Connect a pane's per-canvas signals (cursor/zoom/inspect/activation) so the
     // status bar and inspector follow whichever pane the user interacts with.
     void       wireCanvasSignals(MapCanvas* canvas);
@@ -120,9 +130,25 @@ private:
     void buildPanelsMenu();
     void reopenDockToDefault(const DockEntry& e);
 
-    QList<int> showSubdatasetMultiPicker(
+    // Result of the "Select Variables" dialog (FR-IO-13, Phase 19): which subdatasets
+    // the user picked, and whether they want one layer per variable (the default) or a
+    // single multi-band layer stacking them all (which enables RGB display).
+    struct SubdatasetChoice {
+        QList<int> indices;
+        bool       combine{false};
+    };
+    SubdatasetChoice showSubdatasetMultiPicker(
         const QString& path,
         const std::vector<std::pair<std::string,std::string>>& subs);
+
+    // Load `indices` from `subs` as ONE multi-band layer via a `-separate` band-stack
+    // VRT (FR-IO-13). Returns false when the variables sit on incompatible grids or the
+    // VRT could not be built — the caller then falls back to separate layers.
+    bool loadCombinedSubdatasets(
+        const QString& path,
+        const std::string& stdPath,
+        const std::vector<std::pair<std::string,std::string>>& subs,
+        const QList<int>& indices);
 
     // Shows the NetCDF coordinate assignment dialog when a subdataset opens with
     // identity geotransform. Returns nullopt when user clicks Skip.
@@ -176,6 +202,15 @@ private:
     void                   renderLogEntry(int level, const QString& text);
 
     int                    m_active_pane_idx{0};
+
+    // Phase 18 #1: true while a layer drag started in the Layers panel is in flight. Any
+    // front-switch request is ignored then, so nothing can re-stack a region and steal the
+    // drop target out from under the cursor mid-drag.
+    bool                   m_layer_drag_active{false};
+    // Phase 18 #8: true while >1 layer is selected. The single-subject panels (Band,
+    // Colormap, No-data, Histogram, Layer Info) have no meaningful subject then and stay
+    // blank, exactly as with no image loaded.
+    bool                   m_multi_select{false};
 
     // Managed temp result files captured in layerAboutToBeRemoved (layer still live) and
     // deleted in layerRemoved (after GDALClose). See util/TempFile.hpp / RasterLayer::ownsTempFile.

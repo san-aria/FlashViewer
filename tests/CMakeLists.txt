@@ -56,6 +56,12 @@ add_executable(flashviewer_tests
     # Phase 12 — performance instrumentation (frame stats / stall / latency helpers) + FR-CAP-3
     test_perf.cpp
 
+    # Phase 18 — Layer Panel: pane grouping, multi-select removal, drag-drop reorder
+    test_layer_panel.cpp
+
+    # Phase 19 — NetCDF/HDF combined multi-band layer (-separate band-stack VRT)
+    test_band_stack.cpp
+
     # Shared test harnesses / fixtures
     fixtures/FixtureFactory.cpp
     harness/GdalOracle.cpp
@@ -70,6 +76,7 @@ add_executable(flashviewer_tests
     "${CMAKE_SOURCE_DIR}/src/core/ThreadPool.cpp"
     "${CMAKE_SOURCE_DIR}/src/core/RasterLayer.cpp"
     "${CMAKE_SOURCE_DIR}/src/core/LayerManager.cpp"
+    "${CMAKE_SOURCE_DIR}/src/panels/HistogramPanel.cpp"
     "${CMAKE_SOURCE_DIR}/src/render/SyncGroup.cpp"
     "${CMAKE_SOURCE_DIR}/src/math/ExpressionEngine.cpp"
     "${CMAKE_SOURCE_DIR}/src/io/RasterDataset.cpp"
@@ -77,6 +84,7 @@ add_executable(flashviewer_tests
     "${CMAKE_SOURCE_DIR}/src/io/CloudReader.cpp"
     "${CMAKE_SOURCE_DIR}/src/io/UrlGuard.cpp"
     "${CMAKE_SOURCE_DIR}/src/io/BinaryRasterParser.cpp"
+    "${CMAKE_SOURCE_DIR}/src/io/BandStackVrt.cpp"
     "${CMAKE_SOURCE_DIR}/src/render/GlslProgram.cpp"
     "${CMAKE_SOURCE_DIR}/src/render/Camera.cpp"
     "${CMAKE_SOURCE_DIR}/src/render/TileRenderer.cpp"
@@ -128,4 +136,22 @@ set_target_properties(flashviewer_tests PROPERTIES
     AUTOMOC ON
 )
 
-catch_discover_tests(flashviewer_tests)
+# SKIP_RETURN_CODE must be set explicitly — do not rely on Catch2 setting it.
+#
+# catch_discover_tests() registers ONE CTest test per Catch2 test case, so a case
+# that SKIPs is a run in which *every* selected test was skipped. Catch2 exits 4
+# ("no tests ran") for such a run. Catch2's own Catch.cmake only started emitting
+# `SKIP_RETURN_CODE 4` on the discovered tests in v3.5.0; on older Catch2 the
+# property is absent and CTest scores that exit 4 as a hard failure.
+#
+# That is exactly what broke the Linux lanes: Ubuntu 24.04 ships catch2 3.4.0, so
+# the three unconditionally-skipped [perf][rhp] cases (TC-PERF-01/07, 03/04, 05,
+# which need FV_PERF_RHP) reported ***Failed, while Windows/macOS — on Catch2
+# >= 3.5 via conda-forge/Homebrew — reported them as Skipped and stayed green.
+#
+# Setting it here fixes every conditional SKIP in the suite too (offscreen GL,
+# netCDF driver, PROJ data), which would fail the same way on a runner lacking
+# those. On Catch2 >= 3.5 this merely restates the value Catch2 already sets.
+catch_discover_tests(flashviewer_tests
+    PROPERTIES SKIP_RETURN_CODE 4
+)

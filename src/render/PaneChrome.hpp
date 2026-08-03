@@ -35,6 +35,8 @@ public:
     void setSyncRole(int role);
     // Current scale-bar visibility, for the gear menu's checkable "Show Scale Bar" item (Phase 7).
     void setScaleBarVisible(bool on) { m_scalebar_visible = on; }
+    // Current colorbar visibility, for the gear menu's checkable "Show Colorbar" item (Phase 16 #5).
+    void setColorbarVisible(bool on) { m_colorbar_visible = on; }
     // Resolver supplying the other panes (+ synced flag) for the gear's "Sync With" submenu.
     void setSyncInfoResolver(std::function<std::vector<PaneSyncEntry>()> r) { m_sync_resolver = std::move(r); }
 
@@ -47,6 +49,7 @@ signals:
     void syncToggled(quint64 otherPaneId);   // a "Sync With" submenu entry was toggled (Phase 6.5)
     void unsyncRequested();                  // "Unsync" chosen (clears this pane's group)
     void scaleBarToggled(bool visible);      // "Show Scale Bar" toggled (Phase 7 follow-up)
+    void colorbarToggled(bool visible);      // "Show Colorbar" toggled (Phase 16 #5)
     void crsRequested();                      // "Project CRS…" chosen (Phase 11)
 
 protected:
@@ -67,6 +70,7 @@ private:
     uint64_t       m_pane_id{0};
     int            m_sync_role{0};   // 0 none, 1 master, 2 slave
     bool           m_scalebar_visible{true};   // reflects the pane's scale-bar visibility
+    bool           m_colorbar_visible{true};   // reflects the pane's colorbar visibility (Phase 16 #5)
     QPoint         m_drag_start;
     std::function<std::vector<PaneSyncEntry>()> m_sync_resolver;
 };

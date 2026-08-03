@@ -7,6 +7,7 @@
 #include <QVBoxLayout>
 #include <QStackedWidget>
 #include <QLabel>
+#include <QStringList>
 #include <algorithm>
 
 // Used on each section frame so the border only targets the frame itself.
@@ -123,7 +124,16 @@ void BandSelectorWidget::setLayer(RasterLayer* layer) {
     setEnabled(true);
 
     int nb = layer->dataset()->bandCount();
-    populate(nb);
+    // Prefer GDAL band descriptions when the dataset carries them — a Phase-19 stacked
+    // NetCDF/HDF layer stamps its variable names there, and described GeoTIFFs benefit
+    // for free. Falls back to plain "Band N" when a band has no description.
+    QStringList labels;
+    for (int b = 1; b <= nb; ++b) {
+        const QString d = QString::fromStdString(
+            layer->dataset()->bandDescription(b)).trimmed();
+        labels << (d.isEmpty() ? QString() : d);
+    }
+    populate(nb, labels);
 
     const BandMapping& bm = layer->bandMapping();
     bool gray = bm.isGrayscale();
@@ -143,11 +153,17 @@ void BandSelectorWidget::setLayer(RasterLayer* layer) {
     m_updating = false;
 }
 
-void BandSelectorWidget::populate(int n_bands) {
-    auto fill = [n_bands](QComboBox* cb) {
+void BandSelectorWidget::populate(int n_bands, const QStringList& labels) {
+    auto fill = [n_bands, &labels](QComboBox* cb) {
         cb->clear();
-        for (int i = 1; i <= n_bands; ++i)
-            cb->addItem(QString("Band %1").arg(i));
+        for (int i = 1; i <= n_bands; ++i) {
+            const QString name = (i <= labels.size()) ? labels.at(i - 1) : QString();
+            const QString text = name.isEmpty() ? QString("Band %1").arg(i)
+                                                : QString("Band %1 — %2").arg(i).arg(name);
+            cb->addItem(text);
+            // The combo is narrow when docked; the full label stays reachable on hover.
+            cb->setItemData(i - 1, text, Qt::ToolTipRole);
+        }
     };
     fill(m_r_combo);
     fill(m_g_combo);

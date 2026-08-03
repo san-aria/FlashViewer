@@ -14,11 +14,19 @@ dependencies:
   - catch2>=3
   - cmake>=3.25
   - ninja
-  # Self-contained: Qt6 (incl. Charts + Svg) comes from conda-forge too — no
-  # Homebrew and no aqtinstall needed on macOS.
+  # Self-contained C++ toolchain for macOS. `cxx-compiler` resolves to the
+  # arch-correct conda-forge Clang (clang_osx-64/clangxx_osx-64 on Intel,
+  # clang_osx-arm64/clangxx_osx-arm64 on Apple Silicon) and pulls the matching
+  # MacOSX SDK sysroot; `libcxx` is the matching C++ runtime. This keeps the ABI
+  # aligned with conda-forge Qt/GDAL and needs no Xcode Command Line Tools.
+  # conda's activate scripts set CC/CXX accordingly.
+  - cxx-compiler
+  - libcxx
+  # Self-contained: Qt6 comes from conda-forge too — no Homebrew and no aqtinstall
+  # needed on macOS. Qt SVG ships inside qt6-main, so no separate qt6-svg is needed
+  # (the build's find_package(Qt6 ... Svg) is satisfied by qt6-main).
   - qt6-main
   - qt6-charts
-  - qt6-svg
 
 # ===========================================================================
 # macOS conda build — read before you build/run

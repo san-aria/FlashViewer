@@ -8,13 +8,44 @@
 #include <QVBoxLayout>
 #include <QApplication>
 #include <QDragEnterEvent>
+#include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QMimeData>
+#include <functional>
 
 // MIME type carrying a dragged pane's id, set by PaneChrome's ID label (Phase 6.4).
 static constexpr const char* kPaneMime = "application/x-flashviewer-pane";
 // MIME type carrying a dragged layer's row index, set by LayerPanel's tree (Phase 6.3).
 static constexpr const char* kLayerMime = "application/x-flashviewer-layer";
+
+namespace {
+// A region pill that also ACCEPTS a layer drag (Phase 18 #1). In a stacked region only one
+// pane's canvas is visible, so dropping onto the pill is the only way to move a layer into a
+// pane hidden behind the front one. Callback-based (no Q_OBJECT) so PaneRegion.cpp needs no
+// extra moc unit.
+class PanePill : public QPushButton {
+public:
+    PanePill(const QString& text, QWidget* parent) : QPushButton(text, parent) {
+        setAcceptDrops(true);
+    }
+    std::function<void(int)> onLayerDrop;
+
+protected:
+    void dragEnterEvent(QDragEnterEvent* e) override {
+        if (e->mimeData()->hasFormat(kLayerMime)) e->acceptProposedAction(); else e->ignore();
+    }
+    void dragMoveEvent(QDragMoveEvent* e) override {
+        if (e->mimeData()->hasFormat(kLayerMime)) e->acceptProposedAction(); else e->ignore();
+    }
+    void dropEvent(QDropEvent* e) override {
+        bool ok = false;
+        const int layerIndex = e->mimeData()->data(kLayerMime).toInt(&ok);
+        if (!ok) { e->ignore(); return; }
+        e->acceptProposedAction();
+        if (onLayerDrop) onLayerDrop(layerIndex);
+    }
+};
+} // namespace
 
 PaneRegion::PaneRegion(int index, QWidget* parent)
     : QFrame(parent), m_index(index)
@@ -114,8 +145,10 @@ void PaneRegion::rebuildPills() {
 
     const bool dark = QApplication::palette().window().color().lightness() < 128;
     for (const auto& e : m_panes) {
-        auto* pill = new QPushButton(e.label, m_pill_bar);
+        auto* pill = new PanePill(e.label, m_pill_bar);
         pill->setCursor(Qt::PointingHandCursor);
+        pill->setToolTip(tr("Show pane \"%1\" — or drop a layer here to move it "
+                            "into that pane").arg(e.label));
         pill->setCheckable(true);
         pill->setChecked(e.id == m_front_id);
         const QColor c = e.color.isValid()
@@ -131,6 +164,9 @@ void PaneRegion::rebuildPills() {
             .arg(cn, fillSel).arg(c.red()).arg(c.green()).arg(c.blue()));
         const uint64_t id = e.id;
         connect(pill, &QPushButton::clicked, this, [this, id] { emit paneClicked(id); });
+        pill->onLayerDrop = [this, id](int layerIndex) {
+            emit layerDroppedOnPane(layerIndex, id);
+        };
         // Insert before the trailing stretch.
         m_pill_layout->insertWidget(m_pill_layout->count() - 1, pill);
         (void)dark;

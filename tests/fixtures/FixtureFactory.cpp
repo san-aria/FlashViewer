@@ -99,6 +99,33 @@ FixtureFactory::Fixture FixtureFactory::gradientFloat(int w, int h) {
     return {p, w, h, 1, 4326, false, 0.0};
 }
 
+FixtureFactory::Fixture FixtureFactory::constantFloat(float value, int w, int h, int epsg) {
+    ++m_counter;
+    std::vector<float> data(static_cast<size_t>(w) * h, value);
+
+    // Same grid as gradientFloat() so instances stack without a georeference mismatch.
+    double gt[6] = {0.0, 1.0 / w, 0.0, 1.0, 0.0, -1.0 / h};
+    const void* planes[1] = {data.data()};
+    std::string p = uniquePath("const");
+    writeRaster(p, w, h, 1, GDT_Float32, planes, gt, epsg, false, 0.0);
+    return {p, w, h, 1, epsg, false, 0.0};
+}
+
+FixtureFactory::Fixture FixtureFactory::noCrsFloat(int w, int h) {
+    ++m_counter;
+    std::vector<float> data(static_cast<size_t>(w) * h);
+    for (int r = 0; r < h; ++r)
+        for (int c = 0; c < w; ++c)
+            data[static_cast<size_t>(r) * w + c] = static_cast<float>(c + r * w);
+
+    // Valid north-up geotransform but NO projection (epsg 0 ⇒ writeRaster skips SetProjection).
+    double gt[6] = {0.0, 1.0 / w, 0.0, 1.0, 0.0, -1.0 / h};
+    const void* planes[1] = {data.data()};
+    std::string p = uniquePath("nocrs");
+    writeRaster(p, w, h, 1, GDT_Float32, planes, gt, /*epsg=*/0, false, 0.0);
+    return {p, w, h, 1, 0, false, 0.0};
+}
+
 FixtureFactory::Fixture FixtureFactory::categorical(int w, int h, int nclasses) {
     ++m_counter;
     if (nclasses < 1) nclasses = 1;

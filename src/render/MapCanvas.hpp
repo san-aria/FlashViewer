@@ -83,6 +83,11 @@ public:
     void setScaleBarVisible(bool on);
     bool scaleBarVisible() const { return m_scalebar_visible; }
 
+    // Per-pane colorbar (colormap legend) show/hide (gear menu, Phase 16 #5). This is the
+    // master gate; when off the legend never shows regardless of the topmost visible layer.
+    void setColorbarVisible(bool on);
+    bool colorbarVisible() const { return m_colorbar_visible; }
+
     // Fit camera to show all loaded layers
     void fitToLayers();
 
@@ -107,6 +112,11 @@ public:
     uint32_t crsEpoch() const { return m_crs_epoch; }
     // Clear a user override and revert to the layer-derived Project CRS default (FR-CRS-3).
     void clearProjectCrsOverride();
+    // Re-derive the Project CRS from the bottom-most raster layer (empty ⇒ geographic)
+    // and apply it via setProjectCrsWkt(..., userInitiated=false). No-op once the user
+    // has explicitly overridden the CRS. Call whenever the layer set changes (Phase 11,
+    // FR-CRS-3 default = first layer's CRS; Phase 17 #4 = empty pane adopts a dropped layer).
+    void refreshDerivedProjectCrs();
 
     // Colormap legend overlay
     ColormapLegend* colormapLegend() { return m_cm_legend; }
@@ -157,6 +167,7 @@ signals:
     void paneAssignDropped(uint64_t paneId);   // a pane was dragged (by ID label) onto this pane (Phase 6.4)
     void projectCrsChanged(const QString& wkt);   // this pane's Project CRS changed (Phase 11)
     void paneCrsRequested();   // gear-menu "Project CRS…" → MainWindow opens the picker (Phase 11)
+    void colorbarVisibilityChanged();   // per-pane "Show Colorbar" toggled → MainWindow re-runs updatePaneLegends (Phase 16 #5)
     // On-the-fly reprojection notice (Phase 11, FR-CRS-6): message for the non-modal banner;
     // failed=true → a layer could not be reprojected and was omitted (FR-CRS-5, error styling).
     void reprojectionNotice(const QString& message, bool failed);
@@ -214,6 +225,7 @@ private:
     int     m_sync_role{0};     // 0=None, 1=Master, 2=Slave (mirrors PaneLayout::syncRoleAt)
     bool    m_capturing{false}; // true only during grabForExport() → paintGL skips the border
     bool    m_scalebar_visible{true};   // per-pane scale-bar show/hide (Phase 7 follow-up)
+    bool    m_colorbar_visible{true};   // per-pane colorbar show/hide (Phase 16 #5)
     bool    m_perf_hud_visible{false};  // Performance HUD overlay (FR-APP-14, Phase 12)
     GlInfo  m_gl_info;
     QPointF m_last_mouse_pos;
@@ -237,19 +249,15 @@ private:
     // Whether this pane's representative raster (active-in-pane, else the first raster the pane
     // shows) is in a geographic CRS — drives the scale bar's distance units (Phase 6.4.5).
     bool paneIsGeographic() const;
-    // Re-derive the Project CRS from the bottom-most raster layer (empty ⇒ geographic)
-    // and apply it via setProjectCrsWkt(..., userInitiated=false). No-op once the user
-    // has explicitly overridden the CRS. Call whenever the layer set changes (Phase 11,
-    // FR-CRS-3 default = first layer's CRS).
-    void refreshDerivedProjectCrs();
     // Drop this pane's cached tiles for all its layers (used on Project-CRS change so
     // tiles warped into the old CRS are freed promptly — FR-CRS-2).
     void purgePaneTiles();
     // Raise the user-facing notice when a layer is displayed reprojected on the fly
-    // (modal, requirement #2) or cannot be reprojected (modal warning, FR-CRS-5). Fired
-    // once per (layer, CRS-epoch) from the TileRenderer status callback, deferred out of
-    // paintGL. `failed` selects the warning vs the informational notice.
-    void showReprojectionNotice(uint64_t layer_id, bool failed);
+    // (requirement #2) or cannot be reprojected and is instead shown in its native CRS
+    // (warning, Phase 17 #4 / FR-CRS-5). Fired once per (layer, CRS-epoch) from the
+    // TileRenderer status callback, deferred out of paintGL. `nativeFallback` selects the
+    // warning vs the informational notice.
+    void showReprojectionNotice(uint64_t layer_id, bool nativeFallback);
 
     // --- Per-pane Project CRS state (Phase 11) ---------------------------------
     std::string m_project_wkt;                 // "" = geographic/identity

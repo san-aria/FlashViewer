@@ -89,3 +89,97 @@ TEST_CASE("TC-BND-08 colorbar re-anchor keeps the top-right corner", "[band][leg
     CHECK(c.x() == 0);
     CHECK(c.y() == 0);
 }
+
+// --------------------------------------------------------------------------
+// TC-HST-08 — the Histogram panel's empty state is mutually exclusive with its band
+// views. Regression: the panel re-discovered its two inter-band rules by scanning the
+// content layout for QFrame children — and QLabel IS-A QFrame, so the scan also matched
+// the "No layer" label and switched it ON in RGB mode (it appeared above the three
+// histograms) while switching the last real rule OFF.
+
+#include "panels/HistogramPanel.hpp"
+#include "core/LayerManager.hpp"
+#include "core/RasterLayer.hpp"
+#include "io/BandStackVrt.hpp"
+#include "io/DatasetFactory.hpp"
+
+#include <QScrollArea>
+#include <QLabel>
+#include <QFrame>
+#include <filesystem>
+
+namespace {
+
+// The scroll-area content widget that hosts the empty label, the three band views and
+// the two rules as DIRECT children.
+QWidget* histContent(HistogramPanel& p) {
+    auto* scroll = p.findChild<QScrollArea*>();
+    return scroll ? scroll->widget() : nullptr;
+}
+
+// The empty-state label: the only QLabel that is a direct child of the content widget
+// (each band view keeps its own labels inside itself).
+QLabel* emptyLabel(HistogramPanel& p) {
+    auto* c = histContent(p);
+    if (!c) return nullptr;
+    auto labels = c->findChildren<QLabel*>(Qt::FindDirectChildrenOnly);
+    return labels.isEmpty() ? nullptr : labels.first();
+}
+
+int visibleBandViews(HistogramPanel& p) {
+    auto* c = histContent(p);
+    if (!c) return -1;
+    int n = 0;
+    for (auto* w : c->findChildren<QWidget*>(Qt::FindDirectChildrenOnly)) {
+        if (qobject_cast<QLabel*>(w) || qobject_cast<QFrame*>(w)) continue;  // label / rule
+        if (!w->isHidden()) ++n;
+    }
+    return n;
+}
+
+} // namespace
+
+TEST_CASE("TC-HST-08 histogram empty state never coexists with band views",
+          "[hist][panel]") {
+    FixtureFactory ff;
+    auto a = ff.constantFloat(1.0f, 8, 8);
+    auto b = ff.constantFloat(2.0f, 8, 8);
+    auto c = ff.constantFloat(3.0f, 8, 8);
+    const std::string vrt = fvBuildBandStackVrt(
+        {{a.path, "r"}, {b.path, "g"}, {c.path, "b"}},
+        (std::filesystem::path(ff.tempDir()) / "hist3.vrt").string());
+    REQUIRE_FALSE(vrt.empty());
+
+    auto ds = DatasetFactory::open(vrt);
+    REQUIRE(ds);
+    REQUIRE(ds->bandCount() == 3);
+
+    LayerManager mgr;
+    auto layer = std::make_shared<RasterLayer>(ds);
+    mgr.addLayer(layer);
+
+    HistogramPanel panel;
+    panel.setLayerManager(&mgr);
+
+    auto* empty = emptyLabel(panel);
+    REQUIRE(empty != nullptr);
+
+    SECTION("RGB composite shows three band views and hides the empty label") {
+        REQUIRE_FALSE(layer->bandMapping().isGrayscale());   // 3 bands default to RGB
+        CHECK(empty->isHidden());
+        CHECK(visibleBandViews(panel) == 3);
+    }
+
+    SECTION("Gray shows one band view and still hides the empty label") {
+        layer->bandMapping() = BandMapping::gray(2);
+        mgr.notifyLayerChanged(0);
+        CHECK(empty->isHidden());
+        CHECK(visibleBandViews(panel) == 1);
+    }
+
+    SECTION("Suppressed shows the empty label and no band view") {
+        panel.setSuppressed(true);
+        CHECK_FALSE(empty->isHidden());
+        CHECK(visibleBandViews(panel) == 0);
+    }
+}

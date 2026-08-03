@@ -23,8 +23,14 @@ class PaneLayout : public QWidget {
 public:
     explicit PaneLayout(LayerManager* layers, QWidget* parent = nullptr);
 
-    // Add a new pane (returns the MapCanvas); optionally link to sync group.
-    MapCanvas* addPane(bool linkToDefaultSync = false);
+    // Add a new pane (returns the MapCanvas); optionally link to sync group. `label` empty
+    // ⇒ the default from `nextPaneLabel()` (lowest free "Pane N" above the highest in use).
+    MapCanvas* addPane(bool linkToDefaultSync = false, const QString& label = QString());
+    // Default label a new pane would get right now — used to pre-fill the New-Pane prompt.
+    QString    nextPaneLabel() const;
+    // Colour a new pane should take: the first palette entry no CURRENT pane is wearing, so a
+    // closed pane's colour is freed rather than the whole sequence shifting (FR-PNE-7).
+    QColor     nextPaneColor(bool dark) const;
 
     // Remove a pane by index (cannot remove the last one).
     void removePane(int index);
@@ -72,6 +78,9 @@ signals:
     // A layer was dragged onto a region — MainWindow creates a pane there if empty, then
     // assigns the layer (Phase 6.4.1).
     void layerDroppedOnRegion(int layerIndex, int regionIndex);
+    // A layer was dropped onto a region PILL — the target pane is explicit, even when it is
+    // stacked behind the displayed one (Phase 18 #1). MainWindow assigns it directly.
+    void layerDroppedOnPane(int layerIndex, uint64_t paneId);
     // Sync roles changed — MainWindow refreshes each pane's role icon + clears ghosts (6.5).
     void syncRolesChanged();
 

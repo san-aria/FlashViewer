@@ -92,3 +92,49 @@ TEST_CASE("TC-RND-06 visibleTiles excludes off-screen tiles", "[render][lod]") {
     CHECK(has(0, 0));            // top-left tile is visible
     CHECK_FALSE(has(1, 1));      // bottom-right tile is off-screen → not requested
 }
+
+// TC-RND-17 — a resident tile is stale whenever its texels no longer match the layer's
+// band mapping. Regression: the old rule compared only the RGB/Gray MODE, so re-picking
+// the R/G/B triple (or the gray band) within a mode never scheduled a refresh and the
+// canvas kept drawing the previously decoded bands until an RGB↔Gray round-trip.
+TEST_CASE("TC-RND-17 tile staleness follows the band selection, not just the mode",
+          "[render][lod][bands]") {
+    GpuTile tile;
+
+    SECTION("RGB: identical triple is fresh, any changed channel is stale") {
+        tile.grayscale = false;
+        tile.band_r = 1; tile.band_g = 2; tile.band_b = 3;
+
+        CHECK_FALSE(fvTileBandsStale(tile, BandMapping::rgb(1, 2, 3)));
+        CHECK(fvTileBandsStale(tile, BandMapping::rgb(4, 2, 3)));   // red re-picked
+        CHECK(fvTileBandsStale(tile, BandMapping::rgb(1, 4, 3)));   // green re-picked
+        CHECK(fvTileBandsStale(tile, BandMapping::rgb(1, 2, 4)));   // blue re-picked
+        CHECK(fvTileBandsStale(tile, BandMapping::rgb(3, 2, 1)));   // reordered
+    }
+
+    SECTION("Gray: only the single band matters") {
+        tile.grayscale = true;
+        tile.band_r = 2; tile.band_g = 2; tile.band_b = 2;
+
+        CHECK_FALSE(fvTileBandsStale(tile, BandMapping::gray(2)));
+        CHECK(fvTileBandsStale(tile, BandMapping::gray(5)));
+    }
+
+    SECTION("Gray tile does not chase the unused G/B slots") {
+        // A gray tile decoded from band 2 stays fresh for gray(2) even though its
+        // stored G/B slots hold whatever the previous RGB decode left behind.
+        tile.grayscale = true;
+        tile.band_r = 2; tile.band_g = 7; tile.band_b = 9;
+        CHECK_FALSE(fvTileBandsStale(tile, BandMapping::gray(2)));
+    }
+
+    SECTION("A mode flip is stale in both directions") {
+        tile.grayscale = false;
+        tile.band_r = 1; tile.band_g = 2; tile.band_b = 3;
+        CHECK(fvTileBandsStale(tile, BandMapping::gray(1)));
+
+        tile.grayscale = true;
+        tile.band_r = tile.band_g = tile.band_b = 1;
+        CHECK(fvTileBandsStale(tile, BandMapping::rgb(1, 2, 3)));
+    }
+}

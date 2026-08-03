@@ -278,6 +278,29 @@ TEST_CASE("TC-RND-08 per-layer opacity blends and draw order stacks correctly", 
         CHECK((px[0] < 10 && px[1] < 10 && px[2] > 245));   // blue on top
     }
 
+    SECTION("MapCanvas blend: opacity fades RGB while the framebuffer stays opaque (0.2.0 #7)") {
+        // Mirror MapCanvas::initializeGL exactly: src-over on colour, but the alpha channel
+        // is pinned to the cleared 1.0 (GL_ZERO, GL_ONE) so the QOpenGLWidget never goes
+        // translucent (no Linux/WSL see-through) while opacity still fades the RGB.
+        f.glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
+        gl.clear(0.05f, 0.07f, 0.09f, 1.f);        // opaque dark canvas (≈ #0d1117, alpha 1)
+        prog.bind(f);
+        setupCommon();
+        prog.setUniform(f, "u_opacity", 0.5f);     // white layer at 50 %
+        f.glActiveTexture(GL_TEXTURE1); f.glBindTexture(GL_TEXTURE_1D, white_lut);
+        quad.draw(f);
+        f.glFinish();
+        prog.release(f);
+
+        uint8_t px[4]{};
+        REQUIRE(gl.readPixel(4, 4, px));
+        // RGB visibly dimmed from opaque white (255) toward the dark canvas → the fade.
+        CHECK(std::abs(int(px[0]) - 134) <= 8);    // 255*0.5 + 13*0.5 ≈ 134 (NOT 255 → fade present)
+        CHECK(int(px[0]) < 200);                   // guard: definitely not full-opacity white
+        // Framebuffer stays fully opaque regardless of layer opacity → no see-through.
+        CHECK(px[3] == 255);
+    }
+
     f.glDisable(GL_BLEND);
     f.glDeleteTextures(1,&tb); f.glDeleteTextures(1,&white_lut); f.glDeleteTextures(1,&blue_lut);
     quad.destroy(f); prog.destroy(f);

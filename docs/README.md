@@ -46,21 +46,30 @@ The application integrates display, band compositing, colormap control, spectral
 
 Binary Raw import dialog lets the user specify lines, samples, bands, data type (uint8 / int16 / uint16 / int32 / uint32 / float32 / float64), interleave (BSQ / BIL / BIP), header offset, and byte order. A hex preview of the first 256 bytes is shown as a reference. COG remote reads use a GDAL VSI curl cache of 128 MB with a 512 KB chunk size.
 
+Multi-variable files (NetCDF, HDF5) open through a **Select Variables** dialog listing every subdataset, with a **Load as** choice:
+
+- **Separate layers (one per variable)** — the default: one layer per selected variable, each with its own band/colormap/stretch controls and a variable drop-down for switching subdataset in place.
+- **One multi-band layer** — available once two or more variables are selected: the picked variables are stacked into a single layer where band *k* is variable *k*, so three or more variables arrive ready to view as an **RGB composite**. Bands are named after their variables throughout the UI. Combining requires the variables to share raster size, grid, and CRS; when they do not, FlashViewer says why in a non-blocking notice and loads them as separate layers instead. The stack is a managed temporary `.vrt` that is deleted when the layer is removed.
+
 ### Band and Colormap Control
 
 - Band Selector widget: choose R/G/B band indices for composite mode or a single band for pseudocolor mode; the colormap appears only in Gray mode (hosted on the Gray page of the band selector). Switching RGB↔Gray keeps a constant panel geometry (no reflow), and the controls keep a fixed size and full width whether the dock spans half or full of the panel (scrolling when the dock is short rather than squeezing the elements)
+- Bands that carry a name in the file are listed by it — `Band 2 — u10` rather than `Band 2` — in the band drop-downs, and the Layer Info panel's Bands row reads e.g. `3 (t2m, u10, v10)`. This is what keeps the variables of a combined multi-band NetCDF/HDF layer identifiable, and it applies to any raster with band descriptions
 - 6 built-in colormaps: **gray**, **viridis**, **jet**, **hot**, **RdYlGn**, **plasma**
 - All colormaps are 256-entry RGBA8 LUTs uploaded as `GL_TEXTURE_1D` with `GL_LINEAR` filtering
 - Histogram Panel: histogram binned over the full data range, with the view zoomed by default to the Auto-Stretch (1/99) window; draggable min/max stretch handles (the x-window stays fixed while dragging — the spin boxes update live and the view re-settles on release); clip by **value** or by **percentile (0–100 %)** via a mode switch (the two stay in sync, and only the active pair is shown for a compact panel); spin boxes with up/down arrows for both; and an Auto Stretch button that fills the value fields with the 1/99-percentile values and the percentile fields with 1/99
 - In RGB composite mode the Histogram Panel splits into **three per-channel histograms** (R, G, B) with bins coloured red/green/blue (tuned to read with equal visual weight), each with its own value/percentile clip and Auto-Stretch; every channel stretches its band independently in the rendered composite. The panel is scrollable, and the tabbed Layer-Properties/Histogram group defaults to about half the left column's height so the three histograms aren't squished
-- Colormap Legend overlay: draggable gradient strip with 5 labeled ticks, vertical or horizontal orientation (re-anchors to its corner on orientation change); hidden automatically for RGB composite layers, and toggleable per layer via the Layers panel's right-click "Show Colorbar"
+- Colormap Legend overlay: draggable gradient strip with 5 labeled ticks, vertical or horizontal orientation (re-anchors to its corner on orientation change); hidden automatically for RGB composite layers. The colorbar represents the pane's **topmost visible layer** (visible and opacity > 0), not the active layer, so hiding/zeroing the top layer reveals the next one's colorbar and an all-hidden pane shows none. Each pane has a **"Show Colorbar"** gear-menu toggle (next to "Show Scale Bar"), plus a per-layer right-click "Show Colorbar". Setting a layer's opacity to 0 also unchecks its visibility
 
 ### Multi-Pane and Sync
 
-- Add panes at any time via **View → New Pane** (`Ctrl+Shift+N`); the last pane is always kept. A new pane is **independent** (not auto-synced), and each pane has a top-left **ID label + gear menu** (Close / Edit ID / Sync With / Color) and a focus border when active
-- A single, app-wide layer list drives every pane: **each layer belongs to exactly one pane**, and a pane shows only its own layers. Newly opened rasters appear in the **active pane** (the one last clicked); re-assign a layer by dragging it from the Layers panel onto a pane (or a **"To Pane"** context submenu), and dropping a layer on an empty layout region spawns a pane there
+- Add panes at any time via **View → New Pane** (`Ctrl+Shift+N`), which asks for the pane's name pre-filled with the next free default (`Pane N` — closing *Pane 2* frees that name again, so numbering does not creep upward); the last pane is always kept. A new pane is **independent** (not auto-synced), and each pane has a top-left **ID label + gear menu** (Close / Edit ID / Sync With / Color) and a focus border when active
+- A single, app-wide layer list drives every pane: **each layer belongs to exactly one pane**, and a pane shows only its own layers. Newly opened rasters appear in the **active pane** (the one last clicked); re-assign a layer by dragging it from the Layers panel onto a pane, onto another pane's **group** in the Layers panel, onto a region's **stacking pill** (works even when that pane is stacked behind the displayed one), or via the **"To Pane"** context submenu; dropping a layer on an empty layout region spawns a pane there
+- Selecting a layer marks its pane active but **never re-stacks the region** — so in Full-Window mode you can drag a layer from the pane in front onto a pane behind it without the target disappearing. **Double-click** a layer row or a pane group header (or use *Show This Pane*) to deliberately bring that pane to the front
+- **Per-pane Project CRS on move**: each pane has its own Project CRS (defaults to its bottom-most layer's CRS, or an explicit override). Moving a layer into an **empty** pane makes that pane **adopt the layer's CRS**; moving it into a **populated** pane keeps that pane's CRS and reprojects the layer on the fly. If a layer can't be reprojected into the pane's CRS it is **shown in its own native CRS** (it may not align) with a brief, non-modal notice — never a raw GDAL/PROJ error
 - **Layout modes** (**View → Pane Layout**): Full, Half (side-by-side or top/bottom), and Quarter (2×2). Regions hold a **stack** of panes (a pill strip picks the shown one); place a pane by dragging its ID label onto a region
-- **Per-pane colour-coding**: each pane has a distinct, theme-aware colour that tints its border/ID and its layers' rows, visibility checkboxes, and opacity sliders in the Layers panel
+- **Per-pane colour-coding**: each pane has a distinct, theme-aware colour that tints its border/ID and, in the Layers panel, its rows' background band, visibility ticks and opacity sliders (row text stays the theme's normal colour — the band carries the pane, and bold marks a pane header or the active layer). A new pane takes the first colour no pane on the canvas is currently using, so closing a pane frees its colour rather than shifting the sequence — two live panes never share one; the **active layer's name is shown in bold** (theme-compliant) in every pane
+- **The Layers panel is grouped by pane**: one collapsible, pane-coloured group header per pane, listing that pane's layers in draw order. Every pane gets a header — **including empty ones**, so an empty pane stays visible as a drop target and can be closed from the panel
 - **Sync With** (unified master/slave): the gear menu links panes into a group — the invoker becomes the **master** (★), the others **slaves** (mirror icon); linked panes match the master's view and stay linked for pan/zoom, and a shared **ghost cursor** shows the pointer's geographic position in every synced pane. Un-sync (or closing a synced pane) dissolves the group; non-synced panes keep independent cameras
 - **Per-pane pixel inspect**: in inspect mode, left-click reports the pane's representative/active raster, right-click all its visible rasters; results are grouped under a **collapsible drop-down per pane** (header coloured by the pane), and a shared **red highlight square** marks the sampled pixel in every synced pane
 
@@ -90,7 +99,7 @@ Binary Raw import dialog lets the user specify lines, samples, bands, data type 
 - **Scan/Pixel Profile** (`P`): draw an ROI to compute aggregate statistics across scan rows or pixel columns
   - Modes: Scan (row-wise) / Pixel (column-wise)
   - Statistics: Mean, Median, Standard Deviation, Quantile (configurable *p* in the range 0.0–1.0)
-- **Layer Info Panel**: file path, CRS, dimensions, band count, no-data value, and per-band statistics
+- **Layer Info Panel**: file path, CRS, dimensions, band count, no-data value, and per-band statistics — long values (full path, full CRS WKT) word-wrap within the panel
 
 ### OpenStreetMap Basemap
 
@@ -160,6 +169,8 @@ Binary Raw import dialog lets the user specify lines, samples, bands, data type 
 | `Ctrl+Shift+N` | Add new pane |
 | `Ctrl+Q` | Quit |
 | `Ctrl+click` | Pixel inspect (all bands at clicked location) |
+| `Del` | Remove the layers/panes selected in the Layers panel |
+| `F2` | Rename the selected layer in the Layers panel |
 
 ## Architecture
 
@@ -181,6 +192,8 @@ LOD zoom level: `floor(log2(native_resolution / screen_resolution_at_scale))`
 ### Layer Model
 
 Every data source — raw bands, raster math result, imported raster — is a `RasterLayer`. `LayerManager` owns an ordered list and emits Qt signals (`layerAdded`, `layerRemoved`, `layerChanged`) that drive the UI, renderer, histogram, and spectral plotter.
+
+The Layers panel renders that one flat list **grouped by pane** — a collapsible header per pane over its layer rows. Each row has a visibility toggle (an outlined box with a **tick in the row's pane colour**) and an opacity slider. Selection is the removal set — there are no separate delete checkboxes: **Shift/Ctrl-click** any mix of layers and pane group headers, and selecting a pane also highlights every layer under it in that pane's colour. A **Delete** button (or `Del`) removes the whole selection; if that would empty a pane, you are asked whether to **keep the empty pane or close it too**. The last pane is never removed — its layers are cleared instead. While more than one layer is selected the single-subject panels (Band, Colormap, No-data, Histogram, Layer Info) show their empty state. The ▲/▼ buttons reorder a layer against its **pane siblings**, and dragging a row into another pane's group re-assigns it to that pane.
 
 ### Threading Model
 
@@ -206,10 +219,15 @@ FlashViewer builds on Linux, macOS, and Windows. Two provisioning options:
 
 - **Native (default):** system packages — `apt`/`dnf` on Linux, Homebrew on macOS,
   and conda-forge + `aqtinstall` on Windows.
-- **conda (optional):** a self-contained conda-forge environment (deps **and** Qt)
-  via `environment-linux.yml` / `environment-macos.yml` / `environment-windows.yml`
-  — no system `-dev` packages or `sudo` required. NetCDF/HDF5 support comes from the
-  `libgdal-netcdf` / `libgdal-hdf5` driver plugins listed in those env files.
+- **conda (optional):** a self-contained conda-forge environment (deps, Qt **and**
+  the C++ toolchain) via `environment-linux.yml` / `environment-macos.yml` /
+  `environment-windows.yml` — no system `-dev` packages or `sudo` required.
+  NetCDF/HDF5 support comes from the `libgdal-netcdf` / `libgdal-hdf5` driver
+  plugins listed in those env files.
+  > ⚠️ **Linux GCC ABI:** conda-forge binaries are built against **GCC 12**. Build
+  > with the **bundled conda toolchain** (activate the env; `CC`/`CXX` point at the
+  > conda GCC) or a **system GCC ≥ 12** — mixing conda-forge libs with an older
+  > system GCC causes `GLIBCXX`/libstdc++ ABI errors. See [INSTALL.md](INSTALL.md) §2.6.
 
 See [INSTALL.md](INSTALL.md) for full instructions.
 

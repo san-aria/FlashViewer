@@ -44,6 +44,10 @@ signals:
     void paneClicked(uint64_t id);          // a pill (or canvas) selected this pane
     void paneDropped(uint64_t id, int regionIndex);   // pane dragged onto this region
     void layerDroppedOnRegion(int layerIndex, int regionIndex);   // layer dragged onto this region (Phase 6.4.1)
+    // A layer dropped directly onto a PILL (Phase 18 #1): the target pane is named
+    // explicitly, so a layer can be moved into a pane that is stacked behind the one
+    // currently displayed — no need to bring the target forward first.
+    void layerDroppedOnPane(int layerIndex, uint64_t paneId);
 
 protected:
     void changeEvent(QEvent*)               override;

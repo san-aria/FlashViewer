@@ -7,6 +7,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Emit executables (FlashViewer, flashviewer_tests) at the build root —
+# build/<preset>/FlashViewer — rather than CMake's default per-subdirectory location
+# (build/<preset>/src/, because the target is defined in src/CMakeLists.txt). This
+# matches the run paths documented in INSTALL.md across all platforms/generators.
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+
 option(FLASHVIEWER_ENABLE_ASAN "Enable AddressSanitizer + UBSan" OFF)
 option(FV_PERF_INSTRUMENT "Enable performance instrumentation hooks (frame timer, stall detector)" OFF)
 

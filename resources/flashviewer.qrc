@@ -8,6 +8,8 @@
     <file alias="arrow_down_dark.svg">icons/arrow_down_dark.svg</file>
     <file alias="arrow_up_light.svg">icons/arrow_up_light.svg</file>
     <file alias="arrow_down_light.svg">icons/arrow_down_light.svg</file>
+    <file alias="trash_dark.svg">icons/trash_dark.svg</file>
+    <file alias="trash_light.svg">icons/trash_light.svg</file>
     <file alias="dock_close_dark.svg">icons/dock_close_dark.svg</file>
     <file alias="dock_close_light.svg">icons/dock_close_light.svg</file>
     <file alias="dock_float_dark.svg">icons/dock_float_dark.svg</file>

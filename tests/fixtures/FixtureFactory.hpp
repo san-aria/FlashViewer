@@ -41,6 +41,18 @@ public:
     // F-GRAD: single Float32 band, value = col + row*width (north-up, EPSG:4326).
     Fixture gradientFloat(int w = 16, int h = 16);
 
+    // F-CONST: single Float32 band filled with `value`, on the same north-up 1°×1°
+    // grid as gradientFloat() so several instances stack cleanly. `epsg` selects the
+    // CRS (4326 by default) — pass a different code to build a deliberately
+    // incompatible source for the band-stack grid probe (Phase 19, FR-IO-13).
+    Fixture constantFloat(float value, int w = 16, int h = 16, int epsg = 4326);
+
+    // F-NOCRS: single Float32 band with a valid geotransform but NO source CRS
+    // (epsg 0). Requesting a non-empty target CRS from warpedView() then fails
+    // deterministically (RasterDataset.cpp: source CRS empty) — the trigger for the
+    // Phase 17 #4 native-CRS fallback. Values = col + row*width.
+    Fixture noCrsFloat(int w = 16, int h = 16);
+
     // F-CAT: single Int16 band with exactly `nclasses` distinct values
     // (0..nclasses-1) laid out in vertical stripes. EPSG:32633 (UTM 33N).
     Fixture categorical(int w = 16, int h = 16, int nclasses = 4);

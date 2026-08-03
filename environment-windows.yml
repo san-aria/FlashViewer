@@ -27,8 +27,8 @@ dependencies:
   #   * conda-forge Qt is 6.11.x, NOT the project-pinned 6.6.3 (>=6.4 still holds);
   #   * verify it links against MSVC on your machine.
   # When uncommented: drop the aqt step and configure with CMAKE_PREFIX_PATH set
-  # to just "$env:CONDA_PREFIX/Library" (no Qt path).
+  # to just "$env:CONDA_PREFIX/Library" (no Qt path). Qt SVG ships inside qt6-main,
+  # so no separate qt6-svg is needed (find_package(Qt6 ... Svg) is satisfied by it).
   #
   # - qt6-main
   # - qt6-charts
-  # - qt6-svg

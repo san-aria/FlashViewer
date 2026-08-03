@@ -3,6 +3,7 @@
 #include <QComboBox>
 #include <QFrame>
 #include <QRadioButton>
+#include <QStringList>
 #include <memory>
 
 class RasterLayer;
@@ -30,7 +31,10 @@ private slots:
     void onBandChanged();
 
 private:
-    void populate(int n_bands);
+    // Fill the four band combos. `labels` (when non-empty, one entry per band) carries
+    // the GDAL band descriptions so a stacked NetCDF/HDF layer or a described GeoTIFF
+    // names its bands by variable instead of "Band N" (FR-IO-13, Phase 19).
+    void populate(int n_bands, const QStringList& labels = {});
     void applyToLayer();
 
     RasterLayer*  m_layer{nullptr};

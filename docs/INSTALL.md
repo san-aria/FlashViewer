@@ -314,7 +314,10 @@ activate it in the build shell in §2.5.5.
 > **NetCDF/HDF5 support:** conda-forge ships GDAL format drivers as separate
 > plugins, so `environment-windows.yml` includes `libgdal-netcdf` and
 > `libgdal-hdf5` alongside GDAL. Verify after creation with
-> `gdalinfo --formats` (it should list `netCDF` and `HDF5`).
+> `gdalinfo --formats` (it should list `netCDF` and `HDF5`). These plugins also
+> back the **Select Variables** dialog's *One multi-band layer* mode, which stacks
+> the picked variables through GDAL's VRT driver (always available); without them
+> the file cannot be opened at all, so there is nothing extra to install for it.
 
 #### 2.5.4 Clone the repository
 
@@ -398,10 +401,22 @@ Install [Miniforge](https://github.com/conda-forge/miniforge) (or Miniconda).
 The environment files pin the conda-forge channel and include the GDAL format-
 driver plugins (`libgdal-netcdf`, `libgdal-hdf5`) needed for NetCDF/HDF5 support.
 
-> **A C++ compiler is required.** The environment provides CMake and Ninja but
-> not a compiler. Use the system toolchain — `build-essential`/`gcc` on Linux,
-> Xcode Command Line Tools (`xcode-select --install`) on macOS — or, for a fully
-> self-contained env, add `cxx-compiler` (conda-forge) to the environment file.
+> **The C++ toolchain is bundled (self-contained).** The environment files now
+> include a matching conda-forge compiler and C++ runtime, so no system compiler
+> is required: **Linux** ships `gcc_linux-64` / `gxx_linux-64` / `sysroot_linux-64`
+> plus `libgcc-ng` / `libstdcxx-ng`; **macOS** ships `cxx-compiler` (arch-correct
+> Clang + MacOSX SDK) plus `libcxx`. Conda's activation scripts set `CC`/`CXX` to
+> the bundled compiler — configure CMake from *within the activated env* so it is
+> picked up.
+>
+> ⚠️ **GCC ABI warning (Linux).** conda-forge binaries (Qt, GDAL, …) are built
+> against **GCC 12**'s libstdc++ ABI. If you build FlashViewer with a **system GCC
+> older than 12** against these conda-forge libraries, you will hit link/runtime
+> errors such as `undefined reference to ...__cxx11...` or
+> `GLIBCXX_3.4.x not found`. **Use the bundled conda toolchain** (the default now —
+> just activate the env and let `CC`/`CXX` point at
+> `x86_64-conda-linux-gnu-gcc/g++`), **or** ensure your system compiler is
+> **GCC ≥ 12**. Do not mix an older system GCC with conda-forge binaries.
 
 #### 2.6.2 Linux
 
@@ -450,11 +465,12 @@ See `environment-linux.yml` / `environment-macos.yml` for the full notes.
 
 ### 3.1 Run the test suite
 
-The test suite contains 113 Catch2 tests covering geo-transforms, settings,
+The test suite contains 129 Catch2 tests covering geo-transforms, settings,
 colormaps, the tile cache, the Phase 0 test-infrastructure harnesses
 (fixtures / GDAL oracle / mock network / offscreen-GL), the application shell
 (theme, layout persistence, licenses manifest), raster opening/formats
-(GeoTIFF, binary-raw VRT, NetCDF subdatasets, metadata), no-data/NaN
+(GeoTIFF, binary-raw VRT, NetCDF subdatasets, the combined multi-band variable
+stack and its grid-compatibility probe, metadata), no-data/NaN
 rendering and no-data edge-bleed suppression, selectable display resampling
 (bilinear / bicubic B-spline / bicubic Catmull-Rom), the RGB/pseudocolor/opacity
 render pipeline, LOD selection, the navigation camera (pan / zoom / fit /
@@ -506,8 +522,9 @@ Profile (SRS §6.1).
 2. Use **File → Open** (`Ctrl+O`) to open any GeoTIFF.
 3. Confirm the raster renders, the scale bar appears at the bottom of the canvas, and the cursor coordinates update in the status bar as you move the mouse.
 4. Press `Space` to fit the layer to the view.
-5. Open the **GPU Monitor** dock (View → Panels) and confirm the resident-VRAM readout/sparkline updates as you pan and zoom.
-6. In the **Log** dock, click **Export Logs…** and confirm a `.txt` file is written.
+5. Open the **Layers** dock and confirm the raster is listed under a **collapsible, pane-coloured group header** for its pane, and that its visibility toggle draws a **tick in the pane's colour** when checked.
+6. Open the **GPU Monitor** dock (View → Panels) and confirm the resident-VRAM readout/sparkline updates as you pan and zoom.
+7. In the **Log** dock, click **Export Logs…** and confirm a `.txt` file is written.
 
 ### 3.3 Data directories and the application log
 

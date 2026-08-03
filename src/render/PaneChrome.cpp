@@ -247,6 +247,9 @@ void PaneChrome::showMenu() {
     QAction* actScaleBar = menu.addAction(tr("Show Scale Bar"));
     actScaleBar->setCheckable(true);
     actScaleBar->setChecked(m_scalebar_visible);
+    QAction* actColorbar = menu.addAction(tr("Show Colorbar"));   // Phase 16 #5
+    actColorbar->setCheckable(true);
+    actColorbar->setChecked(m_colorbar_visible);
 
     QAction* chosen = menu.exec(m_gear->mapToGlobal(QPoint(0, m_gear->height())));
     if      (chosen == actClose)  emit closeRequested();
@@ -254,6 +257,7 @@ void PaneChrome::showMenu() {
     else if (chosen == actColor)  emit colorRequested();
     else if (chosen == actCrs)    emit crsRequested();
     else if (chosen == actScaleBar) emit scaleBarToggled(chosen->isChecked());
+    else if (chosen == actColorbar) emit colorbarToggled(chosen->isChecked());
     else if (chosen == actUnsync) emit unsyncRequested();
     else if (chosen) {
         for (const auto& pr : syncActs)

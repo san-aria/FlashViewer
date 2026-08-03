@@ -26,6 +26,10 @@ PaneLayout::PaneLayout(LayerManager* layers, QWidget* parent)
                 [this](int layerIndex, int region) {
                     emit layerDroppedOnRegion(layerIndex, region);   // MainWindow handles it
                 });
+        connect(m_regions[i], &PaneRegion::layerDroppedOnPane, this,
+                [this](int layerIndex, uint64_t paneId) {
+                    emit layerDroppedOnPane(layerIndex, paneId);     // Phase 18 #1
+                });
     }
 
     rebuildTree();   // Full mode initially (single region)
@@ -34,10 +38,25 @@ PaneLayout::PaneLayout(LayerManager* layers, QWidget* parent)
 // --------------------------------------------------------------------------
 // Pane set
 
-MapCanvas* PaneLayout::addPane(bool linkToDefaultSync) {
-    const uint64_t id = m_next_id++;
+QString PaneLayout::nextPaneLabel() const {
+    QStringList labels;
+    labels.reserve(static_cast<int>(m_panes.size()));
+    for (const auto& p : m_panes) labels << p->label();
+    return fvNextPaneLabel(labels);
+}
+
+QColor PaneLayout::nextPaneColor(bool dark) const {
+    QList<QColor> inUse;
+    inUse.reserve(static_cast<int>(m_panes.size()));
+    for (const auto& p : m_panes) inUse << p->color();   // invalid (uncoloured) entries are ignored
+    return fvNextPaneColor(inUse, dark);
+}
+
+MapCanvas* PaneLayout::addPane(bool linkToDefaultSync, const QString& label) {
+    const uint64_t id = m_next_id++;   // ids stay monotonic (stable keys); LABELS reuse gaps
     auto* canvas = new MapCanvas(m_layers, id, this);
-    auto pane = std::make_unique<Pane>(canvas, id, QString("Pane %1").arg(id), this);
+    auto pane = std::make_unique<Pane>(canvas, id,
+                                       label.isEmpty() ? nextPaneLabel() : label, this);
     if (linkToDefaultSync)
         pane->linkToGroup(m_default_sync.get());
 

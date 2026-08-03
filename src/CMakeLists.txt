@@ -27,6 +27,7 @@ qt_add_executable(FlashViewer
     io/RasterDataset.hpp    io/RasterDataset.cpp
     io/DatasetFactory.hpp   io/DatasetFactory.cpp
     io/BinaryRasterParser.hpp io/BinaryRasterParser.cpp
+    io/BandStackVrt.hpp     io/BandStackVrt.cpp
     io/BinaryImportDialog.hpp io/BinaryImportDialog.cpp
     io/CloudReader.hpp      io/CloudReader.cpp
     io/UrlGuard.hpp         io/UrlGuard.cpp
@@ -121,6 +122,8 @@ qt_add_resources(FlashViewer "icons"
         "${CMAKE_SOURCE_DIR}/resources/icons/star_dark.svg"
         "${CMAKE_SOURCE_DIR}/resources/icons/mirror_light.svg"
         "${CMAKE_SOURCE_DIR}/resources/icons/mirror_dark.svg"
+        "${CMAKE_SOURCE_DIR}/resources/icons/trash_light.svg"
+        "${CMAKE_SOURCE_DIR}/resources/icons/trash_dark.svg"
 )
 
 # FR-APP-8 / C-LIC-5 — embed the third-party license manifest (About → Licenses)

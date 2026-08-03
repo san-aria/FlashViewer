@@ -325,7 +325,13 @@ RasterDataset::ensureWarpedLocked(const std::string& norm_wkt,
 
         GDALWarpAppOptions* opts = GDALWarpAppOptionsNew(argv.data(), nullptr);
         GDALDatasetH srcH = static_cast<GDALDatasetH>(src);
+        // Suppress GDAL/PROJ errors during the warp build. A layer that cannot be reprojected
+        // into the pane CRS (e.g. "utm: Invalid latitude") is handled by the native-CRS
+        // fallback + a clean, non-modal notice (Phase 17 #4); the raw CPLError must NOT leak to
+        // the global error banner. CPLGetLastErrorMsg stays available for the FV_WARN below.
+        CPLPushErrorHandler(CPLQuietErrorHandler);
         GDALDatasetH out  = GDALWarp("", nullptr, 1, &srcH, opts, nullptr);
+        CPLPopErrorHandler();
         GDALWarpAppOptionsFree(opts);
 
         if (out) {

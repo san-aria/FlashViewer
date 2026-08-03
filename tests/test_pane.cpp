@@ -85,6 +85,60 @@ TEST_CASE("fvPaneColor gives distinct, valid, theme-aware colours", "[pane][TC-P
     REQUIRE(fvPaneColor(0, true) != fvPaneColor(0, false));
 }
 
+TEST_CASE("fvNextPaneColor never repeats a colour that is live on the canvas",
+          "[pane][TC-PNE-12]") {
+    // FR-PNE-7: the colour is chosen against the panes CURRENTLY on screen, not the new pane's
+    // index. Keying off the index meant closing a pane shifted the whole sequence — closing
+    // Pane 1 (blue) and adding a pane handed the newcomer red, the colour Pane 2 already wore.
+    for (bool dark : {true, false}) {
+        const QColor c0 = fvPaneColor(0, dark);
+        const QColor c1 = fvPaneColor(1, dark);
+        const QColor c2 = fvPaneColor(2, dark);
+
+        REQUIRE(fvNextPaneColor({}, dark) == c0);            // first pane takes the first hue
+        REQUIRE(fvNextPaneColor({c0}, dark) == c1);
+        REQUIRE(fvNextPaneColor({c0, c1}, dark) == c2);
+
+        // THE REGRESSION: only the 2nd colour is still on screen (the 1st pane was closed) —
+        // the newcomer must take the free 1st colour, never repeat the live one.
+        const QColor after = fvNextPaneColor({c1}, dark);
+        REQUIRE(after == c0);
+        REQUIRE(after != c1);
+
+        // Order of the in-use list is irrelevant; gaps anywhere are reused.
+        REQUIRE(fvNextPaneColor({c2, c0}, dark) == c1);
+        REQUIRE(fvNextPaneColor({c1, c2}, dark) == c0);
+
+        // Invalid (uncoloured) entries are ignored rather than blocking a slot.
+        REQUIRE(fvNextPaneColor({QColor(), c0}, dark) == c1);
+
+        // Whatever the occupancy, the result never collides with a live pane colour until the
+        // palette is exhausted.
+        QList<QColor> live;
+        for (int i = 0; i < kFvPaneColorCount; ++i) {
+            const QColor next = fvNextPaneColor(live, dark);
+            for (const QColor& u : live) REQUIRE_FALSE(fvPaneColorsClash(u, next));
+            live << next;
+        }
+        REQUIRE(live.size() == kFvPaneColorCount);
+        // Every palette entry got used exactly once.
+        std::set<QRgb> seen;
+        for (const QColor& c : live) seen.insert(c.rgb());
+        REQUIRE(seen.size() == static_cast<size_t>(kFvPaneColorCount));
+        // Past the palette it wraps instead of failing (>8 panes).
+        REQUIRE(fvNextPaneColor(live, dark).isValid());
+    }
+
+    // A pane wearing the window accent (the default startup pane) blocks the palette entry
+    // that would read as the same blue — light theme #0969da vs palette[0] #0d6efd.
+    const QColor accent(0x09, 0x69, 0xda);
+    REQUIRE(fvPaneColorsClash(accent, fvPaneColor(0, false)));
+    REQUIRE(fvNextPaneColor({accent}, false) == fvPaneColor(1, false));
+    // ...but it must not swallow genuinely different hues.
+    REQUIRE_FALSE(fvPaneColorsClash(accent, fvPaneColor(1, false)));
+    REQUIRE_FALSE(fvPaneColorsClash(accent, fvPaneColor(2, false)));
+}
+
 TEST_CASE("fvRegionCount matches the layout mode", "[pane][TC-PNE-08]") {
     REQUIRE(fvRegionCount(PaneLayoutMode::Full)    == 1);
     REQUIRE(fvRegionCount(PaneLayoutMode::HalfH)   == 2);

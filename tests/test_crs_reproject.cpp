@@ -50,6 +50,38 @@ TEST_CASE("TC-CRS-05 warpedView is a no-op for the source/empty CRS", "[crs][pha
     REQUIRE(buf.height == ds->height());
 }
 
+// Phase 17 #4 — native-CRS fallback trigger. A layer with NO source CRS cannot be warped
+// into a pane CRS (warpedView reports failed), yet its native view is always drawable, so
+// the TileRenderer can draw it unwarped instead of omitting it. This is the deterministic
+// mechanism behind the "shown in its native CRS" notice (no raw PROJ/GDAL error surfaces).
+TEST_CASE("TC-CRS-13 unreprojectable layer keeps a drawable native view", "[crs][phase17]") {
+    FixtureFactory ff;
+    auto nc = ff.noCrsFloat(32, 32);
+    auto ds = RasterDataset::open(nc.path);
+    REQUIRE(ds != nullptr);
+    REQUIRE(ds->crsWkt().empty());                 // no source CRS on disk
+
+    // Warping into a real target CRS fails (cannot align a CRS-less source) — the trigger.
+    auto vFail = ds->warpedView("EPSG:32633");
+    REQUIRE(vFail.failed);
+    REQUIRE_FALSE(vFail.sameAsSource);
+
+    // Fallback: the native view (empty target) is always sameAsSource, never failed, and
+    // reports the source dimensions — the renderer draws THIS instead of omitting the layer.
+    auto vNative = ds->warpedView(std::string());
+    REQUIRE(vNative.sameAsSource);
+    REQUIRE_FALSE(vNative.failed);
+    REQUIRE(vNative.width  == ds->width());
+    REQUIRE(vNative.height == ds->height());
+
+    // And a raw read through the native path returns real pixels (what the tiles carry).
+    auto buf = ds->readWarpedRegion(std::string(), 0, 0, ds->width(), ds->height(),
+                                    ds->width(), ds->height());
+    REQUIRE(buf.isValid());
+    REQUIRE(buf.width  == ds->width());
+    REQUIRE(buf.height == ds->height());
+}
+
 // RasterDataset::warpedView — reprojecting a 4326 scene into a different (UTM) CRS.
 TEST_CASE("TC-CRS-01 warpedView reprojects into a different Project CRS", "[crs][phase11]") {
     FixtureFactory ff;

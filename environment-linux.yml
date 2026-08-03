@@ -14,11 +14,21 @@ dependencies:
   - catch2>=3
   - cmake>=3.25
   - ninja
-  # Self-contained: Qt6 (incl. Charts + Svg) comes from conda-forge too — no
-  # system packages and no aqtinstall needed on Linux.
+  # Self-contained C++ toolchain (conda-forge crosstool GCC 12 + glibc sysroot).
+  # conda-forge Qt/GDAL binaries are built against GCC 12's libstdc++ ABI; bundling
+  # the matching compiler + runtime here avoids "_GLIBCXX_.../undefined symbol"
+  # ABI errors on hosts whose system GCC is older than 12 (see INSTALL.md §2.6).
+  # conda's activate scripts set CC/CXX to x86_64-conda-linux-gnu-gcc/g++.
+  - gcc_linux-64
+  - gxx_linux-64
+  - sysroot_linux-64
+  - libgcc-ng
+  - libstdcxx-ng
+  # Self-contained: Qt6 comes from conda-forge too — no system packages and no
+  # aqtinstall needed on Linux. Qt SVG ships inside qt6-main, so no separate
+  # qt6-svg is needed (the build's find_package(Qt6 ... Svg) is satisfied by qt6-main).
   - qt6-main
   - qt6-charts
-  - qt6-svg
 
 # ===========================================================================
 # Linux conda build — read before you build/run

@@ -197,8 +197,14 @@ bool TileRenderer::ensureTile(QOpenGLFunctions_4_1_Core& gl,
     // Step 1: Check upload_ready FIRST — handles both initial load AND refresh completion
     if (tile->upload_ready.load(std::memory_order_acquire)) {
         std::lock_guard lock(tile->data_mutex);
-        bool gray = layer->bandMapping().isGrayscale();
+        // Describe the tile by what the worker actually DECODED, not by the layer's
+        // mapping right now — those can differ if the user changed bands mid-decode,
+        // and uploading against the wrong description would show stale texels as fresh.
+        const bool gray    = tile->pending_gray;
         tile->grayscale    = gray;
+        tile->band_r       = tile->pending_band_r;
+        tile->band_g       = tile->pending_band_g;
+        tile->band_b       = tile->pending_band_b;
         tile->stretch_min  = layer->stretchMin();
         tile->stretch_max  = layer->stretchMax();
         if (!gray) {
@@ -229,11 +235,12 @@ bool TileRenderer::ensureTile(QOpenGLFunctions_4_1_Core& gl,
 
     // Step 2: Check if tile is Ready
     if (tile->state == TileState::Ready) {
-        // If band mode matches, all good
-        bool cur_gray = layer->bandMapping().isGrayscale();
-        if (tile->grayscale == cur_gray) return true;
+        // Matching means the same MODE *and* the same source bands. Comparing only the
+        // mode left a re-pick of the R/G/B triple (or of the gray band) drawing the
+        // previously decoded bands until an RGB↔Gray round-trip forced a reload.
+        if (!fvTileBandsStale(*tile, layer->bandMapping())) return true;
 
-        // Band mode mismatch — schedule a refresh worker (only once)
+        // Band selection mismatch — schedule a refresh worker (only once)
         if (!tile->refreshing.load(std::memory_order_acquire)) {
             auto ds = layer->dataset();
             if (ds) {
@@ -282,6 +289,10 @@ bool TileRenderer::ensureTile(QOpenGLFunctions_4_1_Core& gl,
                     tile_ref->tile_h = buf.height;
                     tile_ref->inner_x = xoff - rx0; tile_ref->inner_y = yoff - ry0;
                     tile_ref->inner_w = act_w;      tile_ref->inner_h = act_h;
+                    tile_ref->pending_gray   = gray;
+                    tile_ref->pending_band_r = gray ? bm.grayBand() : bm.red_idx;
+                    tile_ref->pending_band_g = gray ? bm.grayBand() : bm.green_idx;
+                    tile_ref->pending_band_b = gray ? bm.grayBand() : bm.blue_idx;
                     if (!gray) {
                         int nb = buf.bands;
                         tile_ref->cpu_data_r.assign(buf.bandPtr(0), buf.bandPtr(0) + buf.width*buf.height);
@@ -350,6 +361,10 @@ bool TileRenderer::ensureTile(QOpenGLFunctions_4_1_Core& gl,
         tile_ref->tile_h = buf.height;
         tile_ref->inner_x = xoff - rx0; tile_ref->inner_y = yoff - ry0;
         tile_ref->inner_w = act_w;      tile_ref->inner_h = act_h;
+        tile_ref->pending_gray   = gray;
+        tile_ref->pending_band_r = gray ? bm.grayBand() : bm.red_idx;
+        tile_ref->pending_band_g = gray ? bm.grayBand() : bm.green_idx;
+        tile_ref->pending_band_b = gray ? bm.grayBand() : bm.blue_idx;
 
         if (!gray) {
             int nb = buf.bands;
@@ -498,8 +513,20 @@ bool TileRenderer::render(QOpenGLFunctions_4_1_Core& gl,
         RasterDataset::WarpedView wv = ds->warpedView(project_wkt, resamp);
 
         const bool reprojecting = !wv.sameAsSource && !wv.failed;
-        if (m_reproject_cb) m_reproject_cb(rl->layerId(), reprojecting, wv.failed);
-        if (wv.failed) {          // cannot align → omit the layer, don't smear it (FR-CRS-5)
+        // Phase 17 #4: when a layer can't be reprojected into the pane CRS, DON'T omit it —
+        // fall back to drawing it UNWARPED in its native CRS. The camera stays in the pane
+        // CRS, so the layer lands at its native georeferenced coordinates (it may not align
+        // with the pane); showReprojectionNotice() tells the user. Its tiles are then read
+        // raw (empty read_wkt ⇒ readWarpedRegion delegates to the untouched source read).
+        std::string read_wkt = project_wkt;
+        bool native_fallback = false;
+        if (wv.failed) {
+            wv = ds->warpedView(std::string());   // native (sameAsSource) view — never fails
+            read_wkt.clear();
+            native_fallback = true;
+        }
+        if (m_reproject_cb) m_reproject_cb(rl->layerId(), reprojecting, native_fallback);
+        if (wv.failed) {          // native view unusable too → skip (defensive; FR-CRS-5)
             all_ready = false;
             continue;
         }
@@ -514,14 +541,14 @@ bool TileRenderer::render(QOpenGLFunctions_4_1_Core& gl,
         bool use_nearest = (pixel_geo_w >= camera.scale());
 
         for (const auto& key : keys) {
-            if (!ensureTile(gl, key, rl, eff_w, eff_h, project_wkt, resamp)) {
+            if (!ensureTile(gl, key, rl, eff_w, eff_h, read_wkt, resamp)) {
                 all_ready = false;
                 // Fall back: draw a coarser tile that covers this area
                 for (int fz = zoom - 1; fz >= 0; --fz) {
                     int diff = zoom - fz;
                     TileKey fallback{key.layer_id, fz,
                         key.tx >> diff, key.ty >> diff, key.crs_epoch};
-                    if (ensureTile(gl, fallback, rl, eff_w, eff_h, project_wkt, resamp)) {
+                    if (ensureTile(gl, fallback, rl, eff_w, eff_h, read_wkt, resamp)) {
                         auto ft = m_cache.get(fallback);
                         if (ft && ft->state == TileState::Ready)
                             drawTile(gl, fallback, *ft, vp, rl, wv, layer_ptr->opacity(), use_nearest);

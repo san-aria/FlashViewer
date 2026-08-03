@@ -118,6 +118,10 @@ class HistogramPanel : public QWidget {
 public:
     explicit HistogramPanel(QWidget* parent = nullptr);
     void setLayerManager(LayerManager* mgr);
+    // Phase 18 #8: >1 layer selected in the Layers panel ⇒ no single subject. While
+    // suppressed the panel shows its empty state and ignores LayerManager refreshes;
+    // clearing it restores the view from the active layer.
+    void setSuppressed(bool on);
 
 signals:
     void stretchChanged(RasterLayer* layer, float lo, float hi);
@@ -130,6 +134,11 @@ private:
 
     LayerManager*        m_mgr{nullptr};
     RasterLayer*         m_layer{nullptr};
+    bool                 m_suppressed{false};
     BandHistogramWidget* m_bands[3]{nullptr, nullptr, nullptr};
     QLabel*              m_empty_label{nullptr};
+    // The two inter-band rules, held directly. They must NOT be re-discovered by
+    // scanning the layout for QFrame children: QLabel derives from QFrame, so such a
+    // scan also matches m_empty_label and toggles "No layer" as if it were a rule.
+    QFrame*              m_separators[2]{nullptr, nullptr};
 };

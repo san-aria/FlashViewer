@@ -3,6 +3,7 @@
 // status bar, and the CRS picker dialog format/compare CRS identically without duplicating
 // OGR boilerplate. WKT/EPSG/PROJ strings are accepted uniformly via SetFromUserInput().
 #include <ogr_spatialref.h>
+#include <cpl_error.h>
 #include <QString>
 #include <cmath>
 #include <string>
@@ -52,7 +53,14 @@ inline bool fvTransformPoint(const std::string& fromWkt, const std::string& toWk
     OGRCoordinateTransformation* ct = OGRCreateCoordinateTransformation(&src, &dst);
     if (!ct) return false;
     double tx = x, ty = y;
+    // Transforming an out-of-domain point (e.g. a cursor readout while the camera sits over a
+    // native-CRS-fallback layer) makes PROJ raise a CE_Failure ("utm: Invalid latitude") that
+    // the global GDAL handler would surface as a red banner. Suppress it locally — the caller
+    // already degrades gracefully on the `false` return (Phase 17 #4). CPLGetLastErrorMsg is
+    // still set for any interested logger.
+    CPLPushErrorHandler(CPLQuietErrorHandler);
     const int ok = ct->Transform(1, &tx, &ty);
+    CPLPopErrorHandler();
     OGRCoordinateTransformation::DestroyCT(ct);
     if (!ok || !std::isfinite(tx) || !std::isfinite(ty)) return false;
     x = tx;

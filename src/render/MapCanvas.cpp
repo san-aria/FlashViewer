@@ -128,8 +128,10 @@ MapCanvas::MapCanvas(LayerManager* layers, uint64_t paneId, QWidget* parent)
             [this](quint64 otherId){ emit paneSyncToggleRequested(otherId); });
     connect(m_chrome, &PaneChrome::unsyncRequested, this, &MapCanvas::paneUnsyncRequested);
     connect(m_chrome, &PaneChrome::scaleBarToggled, this, &MapCanvas::setScaleBarVisible);
+    connect(m_chrome, &PaneChrome::colorbarToggled, this, &MapCanvas::setColorbarVisible);   // Phase 16 #5
     connect(m_chrome, &PaneChrome::crsRequested,    this, &MapCanvas::paneCrsRequested);   // Phase 11
     m_chrome->setScaleBarVisible(m_scalebar_visible);   // init the gear-menu checkmark state
+    m_chrome->setColorbarVisible(m_colorbar_visible);   // init the gear-menu checkmark state (Phase 16 #5)
     m_chrome->setPaneDragId(m_pane_id);   // ID label drags carry this pane's id (Phase 6.4)
     m_chrome->move(8, 8);
     m_chrome->raise();
@@ -170,13 +172,13 @@ MapCanvas::MapCanvas(LayerManager* layers, uint64_t paneId, QWidget* parent)
     // reports each visible layer's reprojection status per frame; announce once per
     // (layer, CRS-epoch), deferred out of paintGL so the modal doesn't run inside a paint.
     m_tile_renderer->setReprojectStatusCallback(
-        [this](uint64_t layerId, bool reprojecting, bool failed) {
-            if (!reprojecting && !failed) return;
+        [this](uint64_t layerId, bool reprojecting, bool nativeFallback) {
+            if (!reprojecting && !nativeFallback) return;
             const auto key = std::make_pair(layerId, m_crs_epoch);
             if (m_reproject_announced.count(key)) return;
             m_reproject_announced.insert(key);
-            QTimer::singleShot(0, this, [this, layerId, failed] {
-                showReprojectionNotice(layerId, failed);
+            QTimer::singleShot(0, this, [this, layerId, nativeFallback] {
+                showReprojectionNotice(layerId, nativeFallback);
             });
         });
 }
@@ -291,7 +293,18 @@ void MapCanvas::initializeGL() {
     };
 
     glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // Per-layer opacity compositing, QGIS/ENVI-style: each layer is blended "source-over" onto
+    // the opaque map canvas (and the layers already drawn beneath it), so as opacity drops the
+    // canvas background (or the layer below) shows through — NOT the desktop.
+    //   • COLOUR: GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA  → rgb = layer·a + below·(1−a).
+    //   • ALPHA:  GL_ZERO / GL_ONE                        → dst_a keeps the cleared 1.0.
+    // Keeping the framebuffer ALPHA at 1 is the crucial part: a QOpenGLWidget whose FBO alpha
+    // drops below 1 is composited TRANSLUCENTLY by the window compositor (the Linux/WSL
+    // "see-through to the desktop" and the whitish tinge; Windows can't do layered GL contexts
+    // so it instead showed no fade). With alpha pinned to 1 the widget is always opaque and the
+    // opacity effect lives purely in RGB, identically on Windows/Linux/macOS (#7). The clear
+    // colour below is opaque, and `glClear` seeds dst_a = 1 every frame.
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
     if (m_dark_bg)
         glClearColor(0.051f, 0.067f, 0.090f, 1.0f);   // GitHub Dark  #0d1117
     else
@@ -398,7 +411,24 @@ void MapCanvas::paintGL() {
     // Frame timer (NFR-PERF-1): time the render cost of this frame; recorded below,
     // before the HUD is drawn, so the HUD's own paint isn't counted.
     const auto perf_t0 = std::chrono::steady_clock::now();
+
+    // Re-establish the compositing GL state EVERY frame before drawing the basemap + tiles.
+    // The pane border / scale bar / HUD are drawn later in this method with QPainter, which
+    // reconfigures the context's blend func, colour mask and clear colour and does NOT restore
+    // them — so on every frame after the first, the tiles would otherwise be drawn with
+    // QPainter's leftover state instead of ours. That silently broke per-layer opacity: the
+    // tile RGB was written unblended (full image → no fade on Windows) while opacity leaked
+    // into the framebuffer alpha (→ see-through to the desktop on Linux/WSL). Setting it here,
+    // not just in initializeGL(), is the fix (#7). Colour: src-over so opacity blends the layer
+    // over the canvas/layers beneath; ALPHA pinned to the cleared 1.0 (GL_ZERO, GL_ONE) so the
+    // widget stays fully opaque and never leaks to the compositor.
+    if (m_dark_bg) glClearColor(0.051f, 0.067f, 0.090f, 1.0f);   // GitHub Dark  #0d1117
+    else           glClearColor(0.965f, 0.973f, 0.980f, 1.0f);   // GitHub Light #f6f8fa
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDisable(GL_DEPTH_TEST);
     glClear(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_BLEND);
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
 
     bool any_missing = false;
 
@@ -672,7 +702,7 @@ void MapCanvas::purgePaneTiles() {
     doneCurrent();
 }
 
-void MapCanvas::showReprojectionNotice(uint64_t layer_id, bool failed) {
+void MapCanvas::showReprojectionNotice(uint64_t layer_id, bool nativeFallback) {
     // Resolve the layer's display name + source CRS for the message.
     QString layerName = tr("Layer");
     std::string srcWkt;
@@ -688,12 +718,15 @@ void MapCanvas::showReprojectionNotice(uint64_t layer_id, bool failed) {
     const QString from = fvCrsShortName(srcWkt);
     const QString to   = fvCrsShortName(m_project_wkt);
 
-    if (failed) {
-        // FR-CRS-5: the layer is omitted; log + a non-modal error banner (FR-CRS-6).
-        FV_WARN("On-the-fly reprojection failed: layer '{}' ({}) → pane CRS {}",
+    if (nativeFallback) {
+        // Phase 17 #4: the layer can't be reprojected into the pane CRS, so it's drawn in
+        // its own (native) CRS and may not align with this pane's other layers. Log + a
+        // non-modal warning banner (FR-CRS-5/6) — no raw PROJ/GDAL error surfaces.
+        FV_WARN("On-the-fly reprojection unavailable: layer '{}' ({}) → pane CRS {}; shown in native CRS",
                 layerName.toStdString(), from.toStdString(), to.toStdString());
         emit reprojectionNotice(
-            tr("⚠ \"%1\" cannot be reprojected into %2 (source %3) — omitted from the display.")
+            tr("⚠ \"%1\" cannot be reprojected into %2 — shown in its native CRS (%3); "
+               "it may not align with this pane.")
                 .arg(layerName, to, from),
             /*failed=*/true);
         return;
@@ -720,6 +753,15 @@ void MapCanvas::setScaleBarVisible(bool on) {
     m_scalebar_visible = on;
     if (m_scale_bar) m_scale_bar->setVisible(on);
     if (m_chrome) m_chrome->setScaleBarVisible(on);   // keep the gear-menu checkmark in sync
+    update();
+}
+
+void MapCanvas::setColorbarVisible(bool on) {
+    m_colorbar_visible = on;
+    if (m_chrome) m_chrome->setColorbarVisible(on);   // keep the gear-menu checkmark in sync
+    // MainWindow::updatePaneLegends honours colorbarVisible() and picks the topmost visible
+    // grayscale layer (or hides the legend when off); ask it to re-evaluate now (Phase 16 #5).
+    emit colorbarVisibilityChanged();
     update();
 }
 
@@ -791,13 +833,22 @@ void MapCanvas::fitToLayers() {
 
     Extent combined = Extent::invalid();
     for (const auto& l : pane_layers) {
-        if (l->type() == LayerType::Raster) {
-            auto* rl = static_cast<RasterLayer*>(l.get());
-            if (combined.isValid())
-                combined = combined.united(rl->extent());
-            else
-                combined = rl->extent();
+        if (l->type() != LayerType::Raster) continue;
+        auto* rl = static_cast<RasterLayer*>(l.get());
+        // Fit in the PANE's Project CRS. Use the layer's extent as seen AFTER on-the-fly
+        // reprojection (warpedView), not its native extent — otherwise a layer whose source
+        // CRS differs from the pane (e.g. a UTM raster dropped into a 4326 pane) would park
+        // the camera at the layer's *native* coordinates while the pane renders in another
+        // CRS, leaving the reprojected layer off-screen and forward-projecting bogus cursor
+        // coordinates into the source CRS (→ "utm: Invalid latitude", Phase 17 #4). When the
+        // warp fails the layer is drawn UNWARPED at its native extent (native-CRS fallback),
+        // so fitting to the native extent is exactly where it is drawn.
+        Extent e = rl->extent();
+        if (auto* ds = rl->dataset()) {
+            auto wv = ds->warpedView(m_project_wkt);
+            if (!wv.failed && wv.extent.isValid()) e = wv.extent;
         }
+        combined = combined.isValid() ? combined.united(e) : e;
     }
     if (combined.isValid()) {
         m_camera.setViewportSize(width(), height());

@@ -524,6 +524,7 @@ HistogramPanel::HistogramPanel(QWidget* parent) : QWidget(parent) {
             sep->setFrameShadow(QFrame::Sunken);
             sep->setVisible(false);
             // separators live between band widgets; toggled with the bands they follow
+            m_separators[i] = sep;
             lay->addWidget(sep);
         }
     }
@@ -546,7 +547,15 @@ void HistogramPanel::setLayerManager(LayerManager* mgr) {
     onActiveLayerChanged(m_mgr->count() > 0 ? 0 : -1);
 }
 
+void HistogramPanel::setSuppressed(bool on) {
+    if (m_suppressed == on) return;
+    m_suppressed = on;
+    if (on) configureFor(nullptr);
+    else    onActiveLayerChanged(m_mgr ? m_mgr->activeIndex() : -1);
+}
+
 void HistogramPanel::onActiveLayerChanged(int index) {
+    if (m_suppressed) { configureFor(nullptr); return; }
     if (!m_mgr || index < 0) { configureFor(nullptr); return; }
     auto layerPtr = m_mgr->activeLayer();
     if (!layerPtr) layerPtr = m_mgr->layerAt(index);
@@ -557,33 +566,22 @@ void HistogramPanel::onActiveLayerChanged(int index) {
 void HistogramPanel::configureFor(RasterLayer* layer) {
     m_layer = layer;
 
-    // Separators are the odd-positioned siblings added in the constructor; collect them.
-    auto* contentLay = qobject_cast<QVBoxLayout*>(m_bands[0]->parentWidget()->layout());
+    // Only the two real inter-band rules — never a layout scan for QFrame children,
+    // which would also match m_empty_label (QLabel IS-A QFrame) and leave "No layer"
+    // showing above the three RGB histograms.
+    auto showSeparators = [this](int visibleBands) {
+        for (auto* s : m_separators) if (s) s->setVisible(visibleBands == 3);
+    };
 
     if (!layer || !layer->dataset()) {
         for (auto* b : m_bands) if (b) b->setVisible(false);
+        showSeparators(0);
         m_empty_label->setVisible(true);
-        if (contentLay) {
-            for (int i = 0; i < contentLay->count(); ++i)
-                if (auto* f = qobject_cast<QFrame*>(contentLay->itemAt(i)->widget()))
-                    f->setVisible(false);
-        }
         return;
     }
 
     m_empty_label->setVisible(false);
     const BandMapping& bm = layer->bandMapping();
-
-    auto showSeparators = [&](int visibleBands) {
-        if (!contentLay) return;
-        int sepIdx = 0;
-        for (int i = 0; i < contentLay->count(); ++i) {
-            auto* f = qobject_cast<QFrame*>(contentLay->itemAt(i)->widget());
-            if (!f) continue;
-            f->setVisible(visibleBands == 3 && sepIdx < 2);
-            ++sepIdx;
-        }
-    };
 
     if (bm.isGrayscale()) {
         m_bands[0]->setBarColor(QColor());          // default highlight (blue), like before

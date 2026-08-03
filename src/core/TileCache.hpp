@@ -16,10 +16,23 @@ struct GpuTile {
     GLuint      texture_b{0};
     TileState   state{TileState::Empty};
     bool        grayscale{false};
+    // The 1-based source bands the RESIDENT textures were decoded from (gray uses
+    // band_r only). Tracked so a band change WITHIN a mode — picking a different
+    // R/G/B triple, or a different gray band — invalidates the tile just as an
+    // RGB↔Gray flip does; comparing the mode flag alone left stale texels on screen.
+    // Written only on the UI thread, from the pending_* values, at upload time.
+    int         band_r{0}, band_g{0}, band_b{0};
     float       stretch_min{0};
     float       stretch_max{1};
     std::atomic<bool> upload_ready{false};
     std::atomic<bool> refreshing{false};
+
+    // What the in-flight decode worker actually read — written by the worker under
+    // data_mutex, committed to grayscale/band_* by the uploader. Keeps the resident
+    // description honest even if the layer's mapping changed again mid-decode (the
+    // next frame then simply schedules another refresh).
+    bool        pending_gray{false};
+    int         pending_band_r{0}, pending_band_g{0}, pending_band_b{0};
 
     std::vector<float> cpu_data_r;
     std::vector<float> cpu_data_g;

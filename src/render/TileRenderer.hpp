@@ -30,6 +30,21 @@ inline int fvEffectiveResample(bool use_nearest, int layer_resample) {
     return use_nearest ? 0 : layer_resample;   // 0 = bilinear (NEAREST filter applied)
 }
 
+// True when a resident tile's texels no longer correspond to the layer's band mapping
+// and must be re-decoded. A tile is stale on an RGB↔Gray flip *and* on a change of the
+// source bands within a mode: re-picking the R/G/B triple, or picking a different gray
+// band, changes the texels even though the mode is unchanged. In gray mode only the
+// single band matters — the unused G/B slots are not compared, so a tile is not
+// needlessly refreshed for them. Free + inline so the staleness rule is unit-testable.
+inline bool fvTileBandsStale(const GpuTile& tile, const BandMapping& bm) {
+    const bool gray = bm.isGrayscale();
+    if (tile.grayscale != gray) return true;
+    if (gray) return tile.band_r != bm.grayBand();
+    return tile.band_r != bm.red_idx
+        || tile.band_g != bm.green_idx
+        || tile.band_b != bm.blue_idx;
+}
+
 // GPU-accelerated tile renderer with async LOD loading.
 // Phase 2 single-texture is replaced here with a proper tile/LOD system.
 class TileRenderer {
@@ -52,9 +67,11 @@ public:
                 uint32_t crs_epoch = 0);
 
     // Per-layer reprojection status callback (Phase 11): invoked during render() for each
-    // visible raster layer with (layer_id, reprojecting, failed) so the canvas can raise
-    // the on-the-fly reprojection notice (requirement #2) and the FR-CRS-5 failure warning.
-    using ReprojectStatusFn = std::function<void(uint64_t layer_id, bool reprojecting, bool failed)>;
+    // visible raster layer with (layer_id, reprojecting, native_fallback) so the canvas can
+    // raise the on-the-fly reprojection notice (requirement #2). native_fallback is true when
+    // the layer could not be warped into the pane CRS and is instead shown in its own native
+    // CRS (Phase 17 #4) rather than omitted.
+    using ReprojectStatusFn = std::function<void(uint64_t layer_id, bool reprojecting, bool native_fallback)>;
     void setReprojectStatusCallback(ReprojectStatusFn fn) { m_reproject_cb = std::move(fn); }
 
     // Remove cached GPU tiles for a layer (call when layer is removed).

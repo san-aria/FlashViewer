@@ -52,18 +52,24 @@ void SvgIconButton::paintEvent(QPaintEvent*)
 
     if (m_svgPath.isEmpty()) return;
 
-    // Render SVG to a premultiplied QImage for smooth sub-pixel antialiasing
+    // Render SVG to a premultiplied QImage for smooth sub-pixel antialiasing.
     QSvgRenderer renderer(m_svgPath);
     if (!renderer.isValid()) return;
 
-    const int iconSz = qMax(8, qMin(width(), height()) - 6);
-    QImage img(iconSz, iconSz, QImage::Format_ARGB32_Premultiplied);
+    const int   iconSz = qMax(8, qMin(width(), height()) - 6);
+    // Rasterize at DEVICE resolution: an image built at logical size would be stretched by
+    // the compositor on a scaled display, which turns 1 px icon strokes into a grey blur.
+    // devicePixelRatio is applied AFTER painting so the QPainter above works in device
+    // pixels and drawImage below still places the icon at its logical size.
+    const qreal dpr = devicePixelRatioF();
+    const int   px  = qMax(1, qRound(iconSz * dpr));
+    QImage img(px, px, QImage::Format_ARGB32_Premultiplied);
     img.fill(Qt::transparent);
     {
         QPainter pp(&img);
         pp.setRenderHint(QPainter::Antialiasing);
         pp.setRenderHint(QPainter::SmoothPixmapTransform);
-        renderer.render(&pp, QRect(0, 0, iconSz, iconSz));
+        renderer.render(&pp, QRect(0, 0, px, px));
     }
 
     // On hover / press: replace icon colour while preserving SVG alpha (SourceIn).
@@ -81,10 +87,11 @@ void SvgIconButton::paintEvent(QPaintEvent*)
     // Reduce opacity for disabled state
     if (!isEnabled()) p.setOpacity(0.35);
 
+    img.setDevicePixelRatio(dpr);   // → drawImage lays it out at iconSz logical pixels
     const int ox = (width()  - iconSz) / 2;
     const int oy = (height() - iconSz) / 2;
     p.setRenderHint(QPainter::SmoothPixmapTransform);
-    p.drawImage(ox, oy, img);
+    p.drawImage(QPointF(ox, oy), img);
 }
 
 void SvgIconButton::enterEvent(QEnterEvent* e)
