@@ -19,6 +19,10 @@ public:
 
     int pendingCount() const { return static_cast<int>(m_pending.load()); }
 
+    /// Number of worker threads. Fixed at construction — m_workers is filled by the
+    /// constructor and only joined by the destructor, so this needs no lock.
+    int threadCount() const { return static_cast<int>(m_workers.size()); }
+
 private:
     std::vector<std::thread>          m_workers;
     std::queue<std::function<void()>> m_queue;

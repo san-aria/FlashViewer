@@ -60,7 +60,9 @@ void TileRenderer::init(QOpenGLFunctions_4_1_Core& gl) {
     gl.glBindVertexArray(0);
 
     m_initialized = true;
-    FV_INFO("TileRenderer: initialized ({} worker threads)", m_pool.pendingCount());
+    // threadCount(), not pendingCount() — the latter is the QUEUE DEPTH, which is
+    // naturally 0 at init, so the line always read "0 worker threads".
+    FV_INFO("TileRenderer: initialized ({} worker threads)", m_pool.threadCount());
 }
 
 void TileRenderer::destroy(QOpenGLFunctions_4_1_Core& gl) {
