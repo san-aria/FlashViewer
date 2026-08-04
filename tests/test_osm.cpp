@@ -6,6 +6,9 @@
 
 #include <ogr_spatialref.h>
 #include <cmath>
+#include <numbers>
+#include <algorithm>
+#include <utility>
 
 // TC-OSM-09 — fvOsmZoomForSpan (pure): wider span ⇒ lower zoom; clamped to [0,19].
 TEST_CASE("OSM zoom decreases with wider geographic span", "[osm][TC-OSM-09]") {
@@ -29,6 +32,105 @@ TEST_CASE("OSM zoom decreases with wider geographic span", "[osm][TC-OSM-09]") {
     REQUIRE(fvOsmZoomForSpan(5000.0, vp) == 0);   // span ≫ world ⇒ clamped to 0
     REQUIRE(fvOsmZoomForSpan(0.0, vp) == 0);
     REQUIRE(fvOsmZoomForSpan(10.0, 0) == 0);
+}
+
+// TC-OSM-10 — fvOsmWrapCopyRange (pure): which world copies a visible span needs.
+// Copy k spans [-180 + 360k, 180 + 360k]; k = 0 is the canonical world.
+TEST_CASE("OSM wrap copy range covers spans past the antimeridian", "[osm][TC-OSM-10]") {
+    using Catch::Matchers::WithinAbs;
+
+    // Wholly inside the canonical world ⇒ that copy alone.
+    REQUIRE(fvOsmWrapCopyRange(-10.0, 10.0)   == std::pair{0, 0});
+    REQUIRE(fvOsmWrapCopyRange(-180.0, 180.0) == std::pair{0, 1});   // touches the k=1 seam
+
+    // Panning EAST past +180 pulls in the copy to the east; 0..360 spans both.
+    REQUIRE(fvOsmWrapCopyRange(170.0, 190.0) == std::pair{0, 1});
+    REQUIRE(fvOsmWrapCopyRange(0.0,   360.0) == std::pair{0, 1});
+    REQUIRE(fvOsmWrapCopyRange(200.0, 300.0) == std::pair{1, 1});    // entirely in copy 1
+
+    // Panning WEST past -180 pulls in the copy to the west; 0..-360 spans both. This is
+    // the case plain truncation gets wrong: -190 must floor into copy -1, not copy 0.
+    REQUIRE(fvOsmWrapCopyRange(-190.0, -170.0) == std::pair{-1, 0});
+    REQUIRE(fvOsmWrapCopyRange(-360.0,    0.0) == std::pair{-1, 0});
+    REQUIRE(fvOsmWrapCopyRange(-300.0, -200.0) == std::pair{-1, -1});
+
+    // A span crossing BOTH edges asks for all three copies.
+    REQUIRE(fvOsmWrapCopyRange(-200.0, 200.0) == std::pair{-1, 1});
+
+    // Degenerate / non-finite spans are safe and never widen the loop.
+    REQUIRE(fvOsmWrapCopyRange(10.0, 10.0)  == std::pair{0, 0});   // empty
+    REQUIRE(fvOsmWrapCopyRange(10.0, -10.0) == std::pair{0, 0});   // inverted
+    REQUIRE(fvOsmWrapCopyRange(std::nan(""), 10.0) == std::pair{0, 0});
+
+    // Absurdly wide spans are capped, so one frame can never draw unbounded copies.
+    const auto huge = fvOsmWrapCopyRange(-100000.0, 100000.0);
+    REQUIRE(huge.second - huge.first + 1 == kFvOsmMaxWrapCopies);
+
+    // Every returned range must actually contain the span's own copies (spot-check the
+    // seam: +180 belongs to copy 1, and -180 to copy 0).
+    REQUIRE(fvOsmWrapCopyRange(180.0, 181.0).first == 1);
+    REQUIRE(fvOsmWrapCopyRange(-180.0, -179.0).first == 0);
+}
+
+// TC-OSM-11 — Mercator latitude tessellation. A tile drawn as ONE quad interpolates its
+// texture linearly across a latitude range Web Mercator does not cover linearly, which at
+// coarse zoom slid the basemap off a geographic raster's coastlines. This checks the row
+// count actually delivers the sub-pixel budget it claims, by measuring the real
+// interpolation error against the exact inverse-Mercator.
+TEST_CASE("OSM tile row tessellation keeps Mercator error sub-pixel", "[osm][TC-OSM-11]") {
+    // Exact latitude at normalised Mercator position t in [0,1] (t=0 is the north edge).
+    auto latAt = [](double t) {
+        return std::atan(std::sinh(std::numbers::pi * (1.0 - 2.0 * t))) * 180.0 / std::numbers::pi;
+    };
+
+    // Coarser zoom must never ask for fewer rows than finer zoom, and the count is bounded.
+    int prev = kFvOsmMaxTileRows + 1;
+    for (int z = 0; z <= 19; ++z) {
+        const int rows = fvOsmTileRows(z);
+        REQUIRE(rows >= 1);
+        REQUIRE(rows <= kFvOsmMaxTileRows);
+        REQUIRE(rows <= prev);            // monotonically non-increasing with zoom
+        prev = rows;
+    }
+    REQUIRE(fvOsmTileRows(0) > 1);        // z=0 spans ~170 deg of latitude - must subdivide
+    REQUIRE(fvOsmTileRows(19) == 1);      // a sliver per tile - one quad is already exact
+
+    // The real check: worst-case displacement, in PIXELS, between the linear interpolation
+    // a sub-cell performs and the true latitude, at the zoom fvOsmZoomForSpan would pick.
+    for (int z = 0; z <= 10; ++z) {
+        const double n     = std::pow(2.0, z);
+        const int    rows  = fvOsmTileRows(z);
+        const double deg_px = 360.0 / (256.0 * n);   // geographic camera at ~256 px/tile
+        double worst_px = 0.0;
+
+        // Sample every tile row, and every sub-cell within it, across the whole grid.
+        for (int ty = 0; ty < static_cast<int>(n); ++ty) {
+            for (int r = 0; r < rows; ++r) {
+                const double t0 = (ty + double(r)     / rows) / n;
+                const double t1 = (ty + double(r + 1) / rows) / n;
+                const double lat0 = latAt(t0), lat1 = latAt(t1);
+                for (int s = 1; s < 16; ++s) {           // interior of the sub-cell
+                    const double f = s / 16.0;
+                    const double drawn = lat0 + f * (lat1 - lat0);   // what the quad does
+                    const double truth = latAt(t0 + f * (t1 - t0));  // where it belongs
+                    worst_px = std::max(worst_px, std::abs(drawn - truth) / deg_px);
+                }
+            }
+        }
+        INFO("zoom " << z << " rows " << rows << " worst " << worst_px << " px");
+        REQUIRE(worst_px < 1.0);
+    }
+
+    // And the regression itself: with a SINGLE quad per tile, z=0 is wildly off - which is
+    // exactly the bug. Confirms the test above would catch a revert.
+    double single_quad_px = 0.0;
+    for (int s = 1; s < 16; ++s) {
+        const double f = s / 16.0;
+        const double drawn = latAt(0.0) + f * (latAt(1.0) - latAt(0.0));
+        single_quad_px = std::max(single_quad_px,
+                                  std::abs(drawn - latAt(f)) / (360.0 / 256.0));
+    }
+    REQUIRE(single_quad_px > 10.0);
 }
 
 // TC-OSM-07 — the basemap is OFF by default on a fresh renderer.

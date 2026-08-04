@@ -12,6 +12,7 @@
 #include <string>
 #include <cmath>
 #include <algorithm>
+#include <utility>
 
 class QOpenGLWidget;
 class OGRCoordinateTransformation;
@@ -26,6 +27,61 @@ inline int fvOsmZoomForSpan(double geo_width_deg, int viewport_px) {
     double n = 360.0 * viewport_px / (256.0 * geo_width_deg);
     double z = std::log2(n);
     return std::clamp(static_cast<int>(std::floor(z)), 0, 19);
+}
+
+// Latitude tessellation for one OSM tile.
+//
+// A Web Mercator tile's texture rows are evenly spaced in MERCATOR y, NOT in latitude,
+// while a drawn quad interpolates its corner latitudes linearly against a linear texture
+// v. Drawing a tile as a single quad therefore misplaces every row except the two edges —
+// invisibly at high zoom (a tile spans a sliver of latitude) but grossly at low zoom,
+// where one tile covers up to 170°, which shows up as the basemap sliding away from a
+// geographic raster's coastlines. The cure is to subdivide the tile into rows whose
+// corner latitudes are each computed through the exact inverse-Mercator, shrinking the
+// span each linear segment has to approximate.
+//
+// Sizing it: linear-interpolation error is ~|lat''|·dt²/8 over a sub-cell of normalised
+// Mercator height dt. lat(t) = atan(sinh(pi(1-2t))), so lat''(t) = -4pi²·sech(u)tanh(u)
+// peaks at |u| = 0.8814 (i.e. +/-45 deg latitude) giving max|lat''| = 2pi² rad = 1131 deg.
+// A geographic camera at the zoom fvOsmZoomForSpan picks (one tile ~ 256 px) shows
+// 360/(256n) deg per pixel, so with `rows` sub-cells per tile and dt = 1/(n·rows):
+//
+//     err_px  ~=  (1131/8)·dt² · 256n/360  =  kFvOsmMercErrPx / (n · rows²)
+//
+// Solving for a half-pixel budget gives rows = ceil(sqrt(2·kFvOsmMercErrPx / n)), which
+// reaches 1 by zoom 8 — beyond that a single quad per tile is already sub-pixel.
+inline constexpr double kFvOsmMercErrPx  = 100.5;
+inline constexpr int    kFvOsmMaxTileRows = 16;
+
+inline int fvOsmTileRows(int zoom) {
+    const double n = std::pow(2.0, static_cast<double>(std::clamp(zoom, 0, 24)));
+    const double rows = std::sqrt(2.0 * kFvOsmMercErrPx / n);   // 0.5 px budget
+    if (!std::isfinite(rows) || rows <= 1.0) return 1;
+    return std::clamp(static_cast<int>(std::ceil(rows)), 1, kFvOsmMaxTileRows);
+}
+
+// Longitude wrap (FR-OSM): an XYZ tile grid covers [-180,180] exactly once, but the camera
+// pans freely past the antimeridian, so the basemap has to repeat. The world is drawn as
+// one or more COPIES of the grid, copy k spanning [-180 + 360k, 180 + 360k]; k = 0 is the
+// canonical world, k = +1 the copy to its east, k = -1 to its west.
+//
+// Bound on how many copies one frame may draw. A view zoomed far enough out to span
+// several worlds is already at z = 0 (one tile), so this only guards against a degenerate
+// camera producing an unbounded draw loop.
+inline constexpr int kFvOsmMaxWrapCopies = 8;
+
+// Inclusive range of copies needed to cover a visible longitude span, which may run past
+// ±180 in either direction. Pure + header-inline so it is unit-testable without GL.
+inline std::pair<int, int> fvOsmWrapCopyRange(double lon_min, double lon_max) {
+    if (!std::isfinite(lon_min) || !std::isfinite(lon_max) || !(lon_max > lon_min))
+        return {0, 0};
+    // floor() (not truncation) so negative longitudes map to the copy on their west:
+    // lon = -190 must land in copy -1, not copy 0.
+    int first = static_cast<int>(std::floor((lon_min + 180.0) / 360.0));
+    int last  = static_cast<int>(std::floor((lon_max + 180.0) / 360.0));
+    if (last < first) std::swap(first, last);
+    if (last - first + 1 > kFvOsmMaxWrapCopies) last = first + kFvOsmMaxWrapCopies - 1;
+    return {first, last};
 }
 
 // Renders OpenStreetMap XYZ tiles as the bottom-most basemap layer.

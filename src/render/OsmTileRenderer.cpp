@@ -248,8 +248,12 @@ void OsmTileRenderer::render(QOpenGLFunctions_4_1_Core& gl, const Camera& camera
     int z = fvOsmZoomForSpan(geo_width, camera.viewportWidth());
     int n = 1 << z;
 
-    auto lonToX = [&](double lon) {
-        return std::clamp(static_cast<int>(std::floor((lon + 180.0) / 360.0 * n)), 0, n-1);
+    // Tile column for a longitude measured FROM THE START of a world copy, i.e. already
+    // reduced to [0,360]. Copy-relative rather than absolute, so the same mapping serves
+    // every wrapped copy.
+    auto lonInCopyToX = [&](double lon_from_copy_start) {
+        return std::clamp(static_cast<int>(std::floor(lon_from_copy_start / 360.0 * n)),
+                          0, n - 1);
     };
     auto latToY = [&](double lat) {
         constexpr double pi = std::numbers::pi;
@@ -258,8 +262,6 @@ void OsmTileRenderer::render(QOpenGLFunctions_4_1_Core& gl, const Camera& camera
         return std::clamp(static_cast<int>(std::floor(y_f)), 0, n-1);
     };
 
-    int tx0 = lonToX(gb[0]);
-    int tx1 = lonToX(gb[2]);
     // Higher latitude = lower tile y index
     int ty0 = latToY(std::min(gb[3],  85.0));
     int ty1 = latToY(std::max(gb[1], -85.0));
@@ -278,12 +280,28 @@ void OsmTileRenderer::render(QOpenGLFunctions_4_1_Core& gl, const Camera& camera
     // reproject each grid vertex individually (Phase 11 — pixel-accurate basemap reprojection,
     // FR-CRS-*). Shared grid lines use identical transformed corners → seamless.
     constexpr double pi = std::numbers::pi;
-    const int tess = m_identity ? 1 : 8;
+    // Rows and columns are tessellated for DIFFERENT reasons, so they are sized separately.
+    //
+    // ROWS always subdivide, even on the geographic path: Web Mercator is non-linear in
+    // latitude, so a tile drawn as one quad interpolates its texture linearly across a
+    // latitude range it does not linearly cover. That was the coarse-zoom basemap drift
+    // (a z=0 tile spans ~170 deg of latitude); fvOsmTileRows keeps the residual sub-pixel
+    // and decays to 1 by zoom 8, where a single quad is already exact enough.
+    //
+    // COLUMNS only need subdividing under a PROJECTED Project CRS, where meridians curve.
+    // Longitude is exactly linear in Mercator, so on the geographic path one column is
+    // mathematically exact and subdividing would only cost draw calls.
+    const int tess_x = m_identity ? 1 : 8;
+    const int tess_y = m_identity ? fvOsmTileRows(z) : std::max(8, fvOsmTileRows(z));
     auto lonAtX = [&](double gx) { return gx / n * 360.0 - 180.0; };
     auto latAtY = [&](double gy) { return std::atan(std::sinh(pi * (1.0 - 2.0*gy / n))) * 180.0 / pi; };
 
-    // Draw one tile: subdivide into `tess`×`tess` sub-cells, each reprojected exactly.
-    auto drawTile = [&](int tx, int ty) {
+    // Draw one tile: subdivide into tess_y×tess_x sub-cells, each positioned exactly.
+    // `lon_offset` places the tile in a wrapped world copy (0 = canonical world, ±360 =
+    // one world east/west, …). The tile IMAGE is identical in every copy, so the key —
+    // and therefore the cache entry and the network request — is offset-independent: a
+    // wrapped world costs extra draw calls, never extra downloads.
+    auto drawTile = [&](int tx, int ty, double lon_offset) {
         OsmTileKey key{z, tx, ty};
         auto gpuIt = m_gpu_tiles.find(key);
         if (gpuIt == m_gpu_tiles.end() || gpuIt->second.tex == 0) {
@@ -298,16 +316,18 @@ void OsmTileRenderer::render(QOpenGLFunctions_4_1_Core& gl, const Camera& camera
         gl.glActiveTexture(GL_TEXTURE0);
         gl.glBindTexture(GL_TEXTURE_2D, gpuIt->second.tex);
 
-        for (int r = 0; r < tess; ++r) {
-            const double lat_top = latAtY(ty + double(r)     / tess);   // higher lat
-            const double lat_bot = latAtY(ty + double(r + 1) / tess);   // lower lat
-            const float  v_top = float(r)     / tess;                   // image v=0 at top
-            const float  v_bot = float(r + 1) / tess;
-            for (int c = 0; c < tess; ++c) {
-                const double lon_min = lonAtX(tx + double(c)     / tess);
-                const double lon_max = lonAtX(tx + double(c + 1) / tess);
-                const float  u_left  = float(c)     / tess;
-                const float  u_right = float(c + 1) / tess;
+        for (int r = 0; r < tess_y; ++r) {
+            // Corner latitudes through the EXACT inverse-Mercator, so each sub-cell's
+            // linear span is a true chord of the curve rather than a guess.
+            const double lat_top = latAtY(ty + double(r)     / tess_y);  // higher lat
+            const double lat_bot = latAtY(ty + double(r + 1) / tess_y);  // lower lat
+            const float  v_top = float(r)     / tess_y;                  // image v=0 at top
+            const float  v_bot = float(r + 1) / tess_y;
+            for (int c = 0; c < tess_x; ++c) {
+                const double lon_min = lonAtX(tx + double(c)     / tess_x) + lon_offset;
+                const double lon_max = lonAtX(tx + double(c + 1) / tess_x) + lon_offset;
+                const float  u_left  = float(c)     / tess_x;
+                const float  u_right = float(c + 1) / tess_x;
 
                 const glm::dvec2 c00 = geoToProject(lon_min, lat_bot);
                 const glm::dvec2 c10 = geoToProject(lon_max, lat_bot);
@@ -324,23 +344,32 @@ void OsmTileRenderer::render(QOpenGLFunctions_4_1_Core& gl, const Camera& camera
         }
     };
 
-    for (int tx = tx0; tx <= tx1; ++tx)
-        for (int ty = ty0; ty <= ty1; ++ty)
-            drawTile(tx, ty);
-
-    // Antimeridian wrap: if the visible geographic extent extends beyond ±180° render
-    // the wrapped portion on the opposite side of the tile grid.
-    if (gb[2] > 180.0) {
-        int wrap1 = lonToX(gb[2] - 360.0);
-        for (int tx = 0; tx <= wrap1; ++tx)
+    // Longitude wrap: draw one copy of the tile grid per 360° the view spans, each shifted
+    // by 360·k, so panning east past +180° or west past −180° keeps showing map instead of
+    // running off the end of the single [-180,180] grid.
+    //
+    // This replaces two earlier "antimeridian" branches that re-drew tiles at their
+    // ORIGINAL longitudes: lonAtX() always maps a column back into [-180,180], so those
+    // tiles landed on top of the canonical copy and nothing appeared beyond the edge.
+    // Shifting the GEOMETRY (not the tile index) is what actually mosaics the copies, and
+    // because adjacent copies share the seam longitude exactly (+180 of copy k is −180 of
+    // copy k+1) the join is seamless.
+    //
+    // Under a projected Project CRS this naturally collapses to a single copy: the inverse
+    // transform in visibleGeoBBox() yields longitudes inside ±180, so the range is {0,0}.
+    const auto [copy_first, copy_last] = fvOsmWrapCopyRange(gb[0], gb[2]);
+    for (int k = copy_first; k <= copy_last; ++k) {
+        const double copy_lon_min = -180.0 + 360.0 * k;
+        // Clip the visible span to this copy, then express it copy-relative for the
+        // column lookup.
+        const double lo = std::max(gb[0], copy_lon_min);
+        const double hi = std::min(gb[2], copy_lon_min + 360.0);
+        if (!(hi > lo)) continue;          // copy contributes nothing (touches at a seam)
+        const int tx0 = lonInCopyToX(lo - copy_lon_min);
+        const int tx1 = lonInCopyToX(hi - copy_lon_min);
+        for (int tx = tx0; tx <= tx1; ++tx)
             for (int ty = ty0; ty <= ty1; ++ty)
-                drawTile(tx, ty);
-    }
-    if (gb[0] < -180.0) {
-        int wrap0 = lonToX(gb[0] + 360.0);
-        for (int tx = wrap0; tx < n; ++tx)
-            for (int ty = ty0; ty <= ty1; ++ty)
-                drawTile(tx, ty);
+                drawTile(tx, ty, 360.0 * k);
     }
 
     gl.glBindVertexArray(0);
