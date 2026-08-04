@@ -5,6 +5,7 @@
 #include "io/RasterDataset.hpp"
 #include "core/GeoTransform.hpp"
 #include "util/MathUtils.hpp"
+#include "widgets/UiKit.hpp"          // fvMakeSection
 
 #include <QtCharts/QChart>
 #include <QtCharts/QChartView>
@@ -14,7 +15,6 @@
 #include <QWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
-#include <QGroupBox>
 #include <QButtonGroup>
 #include <QPushButton>
 #include <QLabel>
@@ -50,19 +50,23 @@ void ScanPixProfileWindow::setupUi() {
     // ---- Controls row ----
     auto* ctrlLay = new QHBoxLayout();
 
-    // Mode group
-    auto* modeBox = new QGroupBox(tr("Mode"), central);
-    auto* modeLay = new QHBoxLayout(modeBox);
+    // Mode group. Section frames, not QGroupBoxes — a group box hangs its title in the
+    // widget's top margin, so the heading collided with the frame border.
+    QVBoxLayout* modeInner = nullptr;
+    auto* modeBox = fvMakeSection(tr("Mode"), modeInner, central);
+    auto* modeLay = new QHBoxLayout();
     m_scan_radio  = new QRadioButton(tr("Scan (rows)"),  modeBox);
     m_pixel_radio = new QRadioButton(tr("Pixel (cols)"), modeBox);
     m_scan_radio->setChecked(true);
     modeLay->addWidget(m_scan_radio);
     modeLay->addWidget(m_pixel_radio);
+    modeInner->addLayout(modeLay);
     ctrlLay->addWidget(modeBox);
 
     // Statistic group
-    auto* statBox = new QGroupBox(tr("Statistic"), central);
-    auto* statLay = new QHBoxLayout(statBox);
+    QVBoxLayout* statInner = nullptr;
+    auto* statBox = fvMakeSection(tr("Statistic"), statInner, central);
+    auto* statLay = new QHBoxLayout();
     m_mean_radio     = new QRadioButton(tr("Mean"),    statBox);
     m_median_radio   = new QRadioButton(tr("Median"),  statBox);
     m_stddev_radio   = new QRadioButton(tr("StdDev"),  statBox);
@@ -82,6 +86,7 @@ void ScanPixProfileWindow::setupUi() {
     statLay->addWidget(m_quantile_radio);
     statLay->addWidget(new QLabel(tr("p:"), statBox));
     statLay->addWidget(m_p_spin);
+    statInner->addLayout(statLay);
     ctrlLay->addWidget(statBox);
 
     // Compute button

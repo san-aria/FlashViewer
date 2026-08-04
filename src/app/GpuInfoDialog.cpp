@@ -1,5 +1,6 @@
 #include "app/GpuInfoDialog.hpp"
 #include "util/Logger.hpp"
+#include "widgets/UiKit.hpp"          // fvMakeSection
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -51,15 +52,11 @@ GpuInfoDialog::GpuInfoDialog(const GlInfo& info, QWidget* parent)
 void GpuInfoDialog::buildUi(const GlInfo& info) {
     auto* lay = new QVBoxLayout(this);
 
+    // Shared section frame (widgets/UiKit.hpp) — this lambda used to be a private copy of
+    // it; it now just adds the frame to the dialog's layout.
     auto makeSection = [&](const QString& title) -> std::pair<QFrame*, QVBoxLayout*> {
-        auto* frame = new QFrame(this);
-        frame->setObjectName("sectionBox");
-        frame->setStyleSheet(
-            "QFrame#sectionBox { border:1px solid palette(mid); border-radius:3px; }");
-        auto* fl = new QVBoxLayout(frame);
-        fl->setContentsMargins(8, 8, 8, 8);
-        fl->setSpacing(6);
-        fl->addWidget(new QLabel(QStringLiteral("<b>%1</b>").arg(title), frame));
+        QVBoxLayout* fl = nullptr;
+        auto* frame = fvMakeSection(title, fl, this);
         lay->addWidget(frame);
         return {frame, fl};
     };

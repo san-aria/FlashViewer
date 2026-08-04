@@ -2,13 +2,13 @@
 #include "io/DatasetFactory.hpp"
 #include "io/RasterDataset.hpp"
 #include "util/Logger.hpp"
+#include "widgets/UiKit.hpp"          // fvMakeSection
 
 #include <ogr_spatialref.h>
 
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
-#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -60,17 +60,23 @@ NetCdfAssignDialog::NetCdfAssignDialog(
     mainLay->addWidget(note);
 
     // ── Coordinate arrays ───────────────────────────────────────────────────
-    auto* coordBox = new QGroupBox(tr("Coordinate Arrays"), this);
-    auto* coordForm = new QFormLayout(coordBox);
+    // Section frames rather than QGroupBoxes: a group box hangs its title in the widget's
+    // top margin, so "Coordinate Arrays" / "CRS / Projection" overlapped the frame border
+    // whenever the title's line height exceeded that margin. fvMakeSection puts the
+    // heading inside the frame, which makes the collision impossible by construction.
+    QVBoxLayout* coordInner = nullptr;
+    auto* coordBox = fvMakeSection(tr("Coordinate Arrays"), coordInner, this);
+    auto* coordForm = new QFormLayout();
     m_x_combo = new QComboBox(coordBox);
     m_y_combo = new QComboBox(coordBox);
     coordForm->addRow(tr("X / Longitude:"), m_x_combo);
     coordForm->addRow(tr("Y / Latitude:"),  m_y_combo);
+    coordInner->addLayout(coordForm);
     mainLay->addWidget(coordBox);
 
     // ── CRS ─────────────────────────────────────────────────────────────────
-    auto* crsBox = new QGroupBox(tr("CRS / Projection"), this);
-    auto* crsLay = new QVBoxLayout(crsBox);
+    QVBoxLayout* crsLay = nullptr;
+    auto* crsBox = fvMakeSection(tr("CRS / Projection"), crsLay, this);
 
     auto* radioRow = new QHBoxLayout();
     m_crs_from_var  = new QRadioButton(tr("From file variable:"), crsBox);

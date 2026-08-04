@@ -1,5 +1,6 @@
 #include "panels/LayerPanel.hpp"
 #include "panels/LayerGrouping.hpp"
+#include "widgets/UiKit.hpp"          // fvPaintTickBox, FvTickCheckBox
 #include "core/LayerManager.hpp"
 #include "core/Layer.hpp"
 #include "core/RasterLayer.hpp"
@@ -71,53 +72,11 @@ static constexpr int kPaneSelRole = Qt::UserRole + 5;
 // LayerTreeWidget::drawRow paints the same band across the branch/indent gutter, which the
 // delegate never sees, so a selected row is uniform edge to edge.
 namespace {
-// Shared indicator painter (Phase 18 follow-up #4). Draws an outlined, theme-coloured box
-// with a stroked TICK in `accent` — instead of the QSS default's solid accent fill, which
-// read as a flat blue square. `accent` is the row's PANE colour, so a ticked box is
-// immediately attributable to its pane in both themes. Used by BOTH the tree's check
-// indicator (via PaneColorDelegate) and the per-layer visibility checkbox, so the two look
-// identical; fully self-painted, hence identical on every platform style.
-void fvPaintTickBox(QPainter* p, const QRect& rect, Qt::CheckState state,
-                    const QColor& accent, const QPalette& pal, bool hovered) {
-    // Keep the glyph square and crisp: work on the largest centred square, ≥12 px.
-    const int side = std::max(12, std::min(rect.width(), rect.height()));
-    QRectF box(0, 0, side - 1.0, side - 1.0);
-    box.moveCenter(QRectF(rect).center());
-
-    QColor solid = accent.isValid() ? accent : pal.color(QPalette::Highlight);
-    solid.setAlpha(255);
-    const bool on = (state != Qt::Unchecked);
-
-    p->save();
-    p->setRenderHint(QPainter::Antialiasing, true);
-    QColor border = on ? solid : pal.color(QPalette::Mid);
-    if (!on && hovered) border = solid;
-    QColor fill = pal.color(QPalette::Base);
-    if (on) { fill = solid; fill.setAlpha(38); }        // faint pane-coloured wash when ticked
-    p->setPen(QPen(border, 1.0));
-    p->setBrush(fill);
-    p->drawRoundedRect(box, 3.0, 3.0);
-
-    if (on) {
-        const QRectF g = box.adjusted(box.width() * 0.24, box.height() * 0.24,
-                                     -box.width() * 0.24, -box.height() * 0.24);
-        QPen pen(solid, std::max(1.5, box.width() * 0.15));
-        pen.setCapStyle(Qt::RoundCap);
-        pen.setJoinStyle(Qt::RoundJoin);
-        p->setPen(pen);
-        p->setBrush(Qt::NoBrush);
-        if (state == Qt::PartiallyChecked) {            // "some of this pane's layers"
-            p->drawLine(QPointF(g.left(), g.center().y()), QPointF(g.right(), g.center().y()));
-        } else {
-            QPolygonF tick;
-            tick << QPointF(g.left(),                    g.top() + g.height() * 0.52)
-                 << QPointF(g.left() + g.width() * 0.36, g.bottom())
-                 << QPointF(g.right(),                   g.top());
-            p->drawPolyline(tick);
-        }
-    }
-    p->restore();
-}
+// The tick-box painter (Phase 18 follow-up #4) and FvTickCheckBox now live in
+// widgets/UiKit.hpp — the Raster Math and GDAL Operations dialogs paint their
+// checkboxes with the same glyph, so it can no longer belong to this file. Here the
+// tick is drawn in the row's PANE colour, making a ticked box immediately attributable
+// to its pane; the dialogs pass no accent and inherit the theme's blue.
 
 // The pane-coloured band a row is painted with. Shared by PaneColorDelegate (which fills the
 // cell area) and LayerTreeWidget::drawRow (which fills the branch/indent gutter QTreeView
@@ -132,26 +91,6 @@ QColor fvRowBand(const QModelIndex& index, const QPalette& pal, bool selected) {
                      : (selected ? 95  : 55));   // layer row: ~38 % selected, ~22 % idle
     return c;
 }
-
-// Per-layer visibility checkbox drawn with fvPaintTickBox so it matches the selection tick
-// (and no longer renders as a solid pane-colour block).
-class FvTickCheckBox : public QCheckBox {
-public:
-    explicit FvTickCheckBox(QWidget* parent = nullptr) : QCheckBox(parent) {
-        setFocusPolicy(Qt::NoFocus);
-        setFixedSize(16, 16);
-    }
-    void setAccent(const QColor& c) { m_accent = c; update(); }
-
-protected:
-    void paintEvent(QPaintEvent*) override {
-        QPainter p(this);
-        fvPaintTickBox(&p, rect(), checkState(), m_accent, palette(), underMouse());
-    }
-
-private:
-    QColor m_accent;
-};
 
 class PaneColorDelegate : public QStyledItemDelegate {
 public:
@@ -974,9 +913,24 @@ void LayerPanel::onContextMenu(const QPoint& pos) {
 }
 
 void LayerPanel::resizeHeaderColumns() {
-    const int kPad = 16;
-    QFontMetrics fm(m_tree->header()->font());
-    m_tree->header()->resizeSection(kColVis, fm.horizontalAdvance(tr("Vis")) + kPad);
+    // The Vis section must clear TWO things, and the old `plainAdvance("Vis") + 16` cleared
+    // neither reliably:
+    //   1. the header label, which the stylesheet renders SEMI-BOLD inside padding
+    //      (QHeaderView::section { font-weight: 600; padding: 4px 6px; border-right: 1px }).
+    //      header()->font() reports none of that, so measuring with it under-sizes the
+    //      section — worse on Linux's wider "Sans Serif" than on Windows.
+    //   2. the visibility tick, which needs clear space either side or it reads as part of
+    //      the neighbouring (stretched) Layer column instead of owning its own.
+    // On Linux the old formula gave 34 px — 20 px of semi-bold label into 21 px of usable
+    // width, and only 9 px around the tick, which is what looked "buried" in the name.
+    QFont headerFont = m_tree->header()->font();
+    headerFont.setWeight(QFont::DemiBold);
+    const int kSectionChrome = 2 * 6 + 1;    // QSS horizontal padding + right border
+    const int kTickClearance = 13;           // breathing room each side of the tick
+    const int headerNeed = QFontMetrics(headerFont).horizontalAdvance(tr("Vis"))
+                           + kSectionChrome;
+    const int tickNeed   = kFvTickBoxSide + 2 * kTickClearance;
+    m_tree->header()->resizeSection(kColVis, std::max(headerNeed, tickNeed));
     m_tree->header()->resizeSection(kColOp, 80);
 }
 

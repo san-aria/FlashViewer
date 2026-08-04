@@ -1,6 +1,7 @@
 #include "panels/BandSelectorWidget.hpp"
 #include "core/RasterLayer.hpp"
 #include "io/RasterDataset.hpp"
+#include "widgets/UiKit.hpp"          // fvMakeSection
 
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -10,21 +11,8 @@
 #include <QStringList>
 #include <algorithm>
 
-// Used on each section frame so the border only targets the frame itself.
-static constexpr const char* kSectionStyle =
-    "QFrame#sectionBox { border: 1px solid palette(mid); border-radius: 3px; }";
-
-static QFrame* makeSection(const QString& title, QVBoxLayout*& innerLay, QWidget* parent) {
-    auto* frame = new QFrame(parent);
-    frame->setObjectName("sectionBox");
-    frame->setStyleSheet(kSectionStyle);
-    innerLay = new QVBoxLayout(frame);
-    innerLay->setContentsMargins(8, 8, 8, 8);
-    innerLay->setSpacing(6);
-    auto* hdr = new QLabel("<b>" + title + "</b>", frame);
-    innerLay->addWidget(hdr);
-    return frame;
-}
+// The section-frame helper is shared — see fvMakeSection in widgets/UiKit.hpp. It is the
+// identical construction this file used to carry privately.
 
 BandSelectorWidget::BandSelectorWidget(QWidget* parent) : QWidget(parent) {
     auto* topLay = new QVBoxLayout(this);
@@ -33,7 +21,7 @@ BandSelectorWidget::BandSelectorWidget(QWidget* parent) : QWidget(parent) {
 
     // ── Band Mode ──────────────────────────────────────────
     QVBoxLayout* modeLay;
-    auto* modeFrame = makeSection(tr("Band Mode"), modeLay, this);
+    auto* modeFrame = fvMakeSection(tr("Band Mode"), modeLay, this);
     auto* btnRow = new QHBoxLayout();
     btnRow->setContentsMargins(0, 0, 0, 0);
     btnRow->setSpacing(16);
@@ -48,7 +36,7 @@ BandSelectorWidget::BandSelectorWidget(QWidget* parent) : QWidget(parent) {
 
     // ── RGB Bands ──────────────────────────────────────────
     QVBoxLayout* rgbLay;
-    m_rgb_box = makeSection(tr("RGB Bands"), rgbLay, this);
+    m_rgb_box = fvMakeSection(tr("RGB Bands"), rgbLay, this);
     auto* rgbForm = new QFormLayout();
     rgbForm->setContentsMargins(0, 0, 0, 0);
     rgbForm->setVerticalSpacing(5);
@@ -68,7 +56,7 @@ BandSelectorWidget::BandSelectorWidget(QWidget* parent) : QWidget(parent) {
 
     // ── Gray Band ──────────────────────────────────────────
     QVBoxLayout* grayLay;
-    m_gray_box = makeSection(tr("Gray Band"), grayLay, this);
+    m_gray_box = fvMakeSection(tr("Gray Band"), grayLay, this);
     auto* grayForm = new QFormLayout();
     grayForm->setContentsMargins(0, 0, 0, 0);
     grayForm->setVerticalSpacing(5);

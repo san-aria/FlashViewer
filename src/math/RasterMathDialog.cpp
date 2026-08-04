@@ -6,6 +6,7 @@
 #include "core/BandMapping.hpp"
 #include "io/RasterDataset.hpp"
 #include "util/Logger.hpp"
+#include "widgets/UiKit.hpp"          // FvTickCheckBox, fvMakeSection
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -40,20 +41,10 @@
 #include <map>
 
 namespace {
-// Section frame with a bold heading, matching the property panels' pattern so the
-// heading never overlaps the widget below it. Mirrors NoDataWidget.
-QFrame* makeSection(const QString& title, QVBoxLayout*& innerLay, QWidget* parent) {
-    auto* frame = new QFrame(parent);
-    frame->setObjectName("sectionBox");
-    frame->setStyleSheet(
-        "QFrame#sectionBox { border: 1px solid palette(mid); border-radius: 3px; }");
-    innerLay = new QVBoxLayout(frame);
-    innerLay->setContentsMargins(8, 8, 8, 8);
-    innerLay->setSpacing(6);
-    auto* hdr = new QLabel("<b>" + title + "</b>", frame);
-    innerLay->addWidget(hdr);
-    return frame;
-}
+// The section-frame helper this dialog introduced now lives in widgets/UiKit.hpp as
+// fvMakeSection, so the Select Variables and Assign Coordinates dialogs can use the same
+// heading-inside-the-frame construction instead of a QGroupBox (whose title overlapped
+// the frame border).
 
 // Short human label for a CRS WKT, e.g. "EPSG:4326" or the CRS name.
 QString crsShortName(const QString& wkt) {
@@ -120,7 +111,7 @@ void RasterMathDialog::setupUi() {
 
     // --- Input Layers section (tree: layer → bands) --------------------------
     QVBoxLayout* layInner = nullptr;
-    auto* layBox = makeSection(
+    auto* layBox = fvMakeSection(
         tr("Input Layers  —  variables L&lt;layer&gt;B&lt;band&gt; (e.g. L1B1, L2B3)"),
         layInner, this);
     m_band_tree = new QTreeWidget(layBox);
@@ -163,7 +154,7 @@ void RasterMathDialog::setupUi() {
 
     // --- Expression section --------------------------------------------------
     QVBoxLayout* exprInner = nullptr;
-    auto* exprBox = makeSection(tr("Expression"), exprInner, this);
+    auto* exprBox = fvMakeSection(tr("Expression"), exprInner, this);
     m_expr_edit = new QPlainTextEdit(exprBox);
     m_expr_edit->setPlaceholderText("(L1B4 - L1B3) / (L1B4 + L1B3)");
     m_expr_edit->setFixedHeight(75);
@@ -191,8 +182,8 @@ void RasterMathDialog::setupUi() {
 
     // --- Options section -----------------------------------------------------
     QVBoxLayout* optInner = nullptr;
-    auto* optBox = makeSection(tr("Options"), optInner, this);
-    m_mask_nodata = new QCheckBox(tr("Mask no-data (result is NaN where any input is no-data)"), optBox);
+    auto* optBox = fvMakeSection(tr("Options"), optInner, this);
+    m_mask_nodata = new FvTickCheckBox(tr("Mask no-data (result is NaN where any input is no-data)"), optBox);
     m_mask_nodata->setChecked(true);
     optInner->addWidget(m_mask_nodata);
 
@@ -264,7 +255,7 @@ void RasterMathDialog::setupUi() {
     // Temporary vs permanent output. Temp (default) → managed file under QDir::tempPath(),
     // auto-deleted when the result layer is removed. Off → the result lands only in the chosen
     // permanent Output file (the field is enabled only then).
-    m_temp_chk = new QCheckBox(tr("Use a temporary output file (auto-deleted when removed)"), optBox);
+    m_temp_chk = new FvTickCheckBox(tr("Use a temporary output file (auto-deleted when removed)"), optBox);
     m_temp_chk->setChecked(true);
     optInner->addWidget(m_temp_chk);
 

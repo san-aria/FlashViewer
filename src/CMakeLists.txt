@@ -76,6 +76,9 @@ qt_add_executable(FlashViewer
     plots/SpectralPlotWindow.hpp   plots/SpectralPlotWindow.cpp
     plots/ScanPixProfileWindow.hpp plots/ScanPixProfileWindow.cpp
 
+    # Shared widgets / UI kit (used by both the panels and the dialogs)
+    widgets/UiKit.hpp              widgets/UiKit.cpp
+
     # Utilities
     util/MathUtils.hpp
     util/Logger.hpp util/Logger.cpp

@@ -204,36 +204,13 @@ QCheckBox::indicator:hover   { border-color: #58a6ff; }
 QCheckBox::indicator:checked { background-color: #1f6feb; border-color: #1f6feb; }
 QCheckBox::indicator:disabled { background-color: #161b22; border-color: #21262d; }
 
-/* ── Tree Widget Checkboxes ─────────────────────────────────────── */
-QTreeWidget::indicator {
-    width: 14px;  height: 14px;
-    border: 1px solid #30363d;
-    background-color: #0d1117;
-    border-radius: 3px;
-}
-QTreeWidget::indicator:hover { border-color: #58a6ff; }
-QTreeWidget::indicator:checked,
-QTreeWidget::indicator:checked:selected {
-    background-color: #1f6feb;
-    border-color: #1f6feb;
-}
+/* No QTreeWidget::indicator rules: no tree or list in the app uses model check states
+   (Qt::ItemIsUserCheckable / CheckStateRole). The Layers panel's "Vis" ticks are item
+   WIDGETS — FvTickCheckBox, which paints itself (widgets/UiKit.hpp). */
 
-/* ── Group Box ──────────────────────────────────────────────────── */
-QGroupBox {
-    border: 1px solid #30363d;
-    border-radius: 6px;
-    margin-top: 10px;
-    padding-top: 8px;
-    color: #e6edf3;
-    background-color: transparent;
-}
-QGroupBox::title {
-    subcontrol-origin: margin;
-    subcontrol-position: top left;
-    padding: 0 4px;
-    color: #848d97;
-    background-color: transparent;
-}
+/* No QGroupBox rules: the app has no QGroupBox left. Every titled section is built with
+   fvMakeSection (widgets/UiKit.hpp), which puts the heading INSIDE the frame — a group
+   box lays its title out in the widget's top margin, where it collided with the border. */
 
 /* ── Tree / List / Table ────────────────────────────────────────── */
 QTreeWidget, QListWidget, QTreeView, QListView, QTableWidget, QTableView {

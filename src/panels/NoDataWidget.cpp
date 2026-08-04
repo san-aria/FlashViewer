@@ -3,6 +3,7 @@
 #include "core/LayerManager.hpp"
 #include "render/MapCanvas.hpp"
 #include "io/RasterDataset.hpp"
+#include "widgets/UiKit.hpp"          // FvTickCheckBox, fvMakeSection
 
 #include <QCheckBox>
 #include <QDoubleSpinBox>
@@ -18,21 +19,14 @@
 #include <vector>
 
 NoDataWidget::NoDataWidget(QWidget* parent) : QWidget(parent) {
-    auto* frame = new QFrame(this);
-    frame->setObjectName("sectionBox");
-    frame->setStyleSheet(
-        "QFrame#sectionBox { border: 1px solid palette(mid); border-radius: 3px; }");
-
-    auto* frameLay = new QVBoxLayout(frame);
-    frameLay->setContentsMargins(8, 8, 8, 8);
-    frameLay->setSpacing(6);
-    frameLay->addWidget(new QLabel(tr("<b>No-Data Override</b>"), frame));
+    QVBoxLayout* frameLay = nullptr;
+    auto* frame = fvMakeSection(tr("No-Data Override"), frameLay, this);
 
     auto* form = new QFormLayout();
     form->setContentsMargins(0, 0, 0, 0);
     form->setVerticalSpacing(5);
 
-    m_override_cb = new QCheckBox(tr("Override No-Data"), frame);
+    m_override_cb = new FvTickCheckBox(tr("Override No-Data"), frame);
     form->addRow(m_override_cb);
 
     m_value_spin = new QDoubleSpinBox(frame);

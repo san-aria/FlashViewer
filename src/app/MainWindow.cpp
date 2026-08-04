@@ -8,6 +8,7 @@
 #include "plots/ScanPixProfileWindow.hpp"
 #include "render/MapCanvas.hpp"
 #include "render/PaneLayout.hpp"
+#include "core/Layer.hpp"             // kDefaultPaneId
 #include "core/RasterLayer.hpp"
 #include "core/LayerManager.hpp"
 #include "io/DatasetFactory.hpp"
@@ -23,6 +24,7 @@
 #include <QElapsedTimer>
 #include "panels/GpuMonitorPanel.hpp"
 #include "panels/MarqueeLabel.hpp"
+#include "widgets/UiKit.hpp"          // fvMakeSection
 #include "panels/LayerPanel.hpp"
 #include "panels/HistogramPanel.hpp"
 #include "panels/BandSelectorWidget.hpp"
@@ -74,7 +76,6 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QDialogButtonBox>
-#include <QGroupBox>
 #include <QRadioButton>
 #include <QDateTime>
 #include <spdlog/spdlog.h>
@@ -404,8 +405,10 @@ MainWindow::SubdatasetChoice MainWindow::showSubdatasetMultiPicker(
     // Load mode (FR-IO-13). "Separate" is the historical behaviour and stays the
     // default; "Combine" stacks the picked variables into one N-band layer so they can
     // be driven as an RGB composite from the Band Selector.
-    auto* modeBox   = new QGroupBox(tr("Load as"), &dlg);
-    auto* modeLay   = new QVBoxLayout(modeBox);
+    // A section frame, not a QGroupBox: the group box hangs its title in the top margin,
+    // so "Load as" overlapped the frame border. fvMakeSection puts the heading inside.
+    QVBoxLayout* modeLay = nullptr;
+    auto* modeBox   = fvMakeSection(tr("Load as"), modeLay, &dlg);
     auto* rbSep     = new QRadioButton(tr("Separate layers (one per variable)"), modeBox);
     auto* rbCombine = new QRadioButton(
         tr("One multi-band layer (enables RGB display)"), modeBox);
@@ -1677,13 +1680,22 @@ void MainWindow::onThemeChanged(Theme t) {
     for (int i = 0; i < m_pane_layout->paneCount(); ++i)
         if (auto* c = m_pane_layout->paneCanvas(i))
             c->setDarkBackground(t == Theme::Dark);
-    // The default pane (0) tracks the theme accent blue (Phase 6.2.1).
-    if (m_pane_layout->paneCount() > 0) {
+    // The default startup pane tracks the theme accent blue (Phase 6.2.1) — resolved by
+    // ID, never by position. m_panes is a vector, so closing the default pane shifts every
+    // later pane down and index 0 becomes somebody else; re-accenting index 0 then stamped
+    // the accent onto an unrelated pane. Repro: add Pane 2, close Pane 1, add Pane 3 (which
+    // correctly reclaims the freed palette slot), toggle the theme — Pane 2, now at index 0,
+    // turned the default pane's blue. Pane ids are monotonic and never reused, so once the
+    // default pane is gone NO pane wears the accent, which is the correct outcome.
+    int defaultIdx = -1;
+    for (int i = 0; i < m_pane_layout->paneCount(); ++i)
+        if (m_pane_layout->paneId(i) == kDefaultPaneId) { defaultIdx = i; break; }
+    if (defaultIdx >= 0) {
         const QColor accent = qApp->palette().highlight().color();
-        m_pane_layout->setPaneColor(0, accent);
-        if (auto* c0 = m_pane_layout->paneCanvas(0)) c0->setPaneColor(accent);
-        if (m_layer_panel) m_layer_panel->refreshPaneColors();
+        m_pane_layout->setPaneColor(defaultIdx, accent);
+        if (auto* c = m_pane_layout->paneCanvas(defaultIdx)) c->setPaneColor(accent);
     }
+    if (m_layer_panel) m_layer_panel->refreshPaneColors();
     if (m_log_widget) {
         m_log_widget->clear();
         for (const auto& e : m_log_entries)

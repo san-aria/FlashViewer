@@ -1,10 +1,10 @@
 #include "io/BinaryImportDialog.hpp"
+#include "widgets/UiKit.hpp"          // FvTickCheckBox, fvMakeSection
 
 #include <QFormLayout>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QDialogButtonBox>
-#include <QGroupBox>
 #include <QSpinBox>
 #include <QComboBox>
 #include <QCheckBox>
@@ -32,8 +32,12 @@ BinaryImportDialog::BinaryImportDialog(const QString& file_path, QWidget* parent
 void BinaryImportDialog::setupUi(const QString& /*file_path*/) {
     auto* mainLay = new QVBoxLayout(this);
 
-    auto* paramBox = new QGroupBox(tr("Image Parameters"), this);
-    auto* form     = new QFormLayout(paramBox);
+    // Section frames, not QGroupBoxes — a group box lays its title out inside the widget's
+    // top margin, so the heading collided with the frame border. fvMakeSection puts the
+    // heading inside the frame, which rules the collision out by construction.
+    QVBoxLayout* paramInner = nullptr;
+    auto* paramBox = fvMakeSection(tr("Image Parameters"), paramInner, this);
+    auto* form     = new QFormLayout();
 
     m_lines_spin = new QSpinBox(paramBox);
     m_lines_spin->setRange(1, 1 << 24);
@@ -65,13 +69,14 @@ void BinaryImportDialog::setupUi(const QString& /*file_path*/) {
     m_header_spin->setSuffix(tr(" bytes"));
     form->addRow(tr("Header offset:"), m_header_spin);
 
-    m_big_endian_chk = new QCheckBox(tr("Big-endian byte order"), paramBox);
+    m_big_endian_chk = new FvTickCheckBox(tr("Big-endian byte order"), paramBox);
     form->addRow(QString(), m_big_endian_chk);
 
+    paramInner->addLayout(form);
     mainLay->addWidget(paramBox);
 
-    auto* hexBox = new QGroupBox(tr("File Preview (first 256 bytes)"), this);
-    auto* hexLay = new QVBoxLayout(hexBox);
+    QVBoxLayout* hexLay = nullptr;
+    auto* hexBox = fvMakeSection(tr("File Preview (first 256 bytes)"), hexLay, this);
     m_hex_preview = new QTextEdit(hexBox);
     m_hex_preview->setReadOnly(true);
     QFont mono("Monospace");

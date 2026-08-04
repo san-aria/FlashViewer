@@ -5,6 +5,7 @@
 #include "core/Layer.hpp"
 #include "io/RasterDataset.hpp"
 #include "util/Logger.hpp"
+#include "widgets/UiKit.hpp"          // FvTickCheckBox
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -414,11 +415,11 @@ void GdalOpsDialog::setupMergeTab(QTabWidget* tabs) {
     outRow->addWidget(browseBtn);
     frm->addRow(tr("Output file:"), outRow);
 
-    m_merge_temp_chk = new QCheckBox(tr("Use a temporary output file (auto-deleted when removed)"), w);
+    m_merge_temp_chk = new FvTickCheckBox(tr("Use a temporary output file (auto-deleted when removed)"), w);
     m_merge_temp_chk->setChecked(true);
     frm->addRow(QString(), m_merge_temp_chk);
 
-    m_merge_display_chk = new QCheckBox(tr("Add result to a pane"), w);
+    m_merge_display_chk = new FvTickCheckBox(tr("Add result to a pane"), w);
     m_merge_display_chk->setChecked(true);
     frm->addRow(QString(), m_merge_display_chk);
 
@@ -486,11 +487,11 @@ void GdalOpsDialog::setupWarpTab(QTabWidget* tabs) {
     outRow->addWidget(browseBtn2);
     frm->addRow(tr("Output file:"), outRow);
 
-    m_warp_temp_chk = new QCheckBox(tr("Use a temporary output file (auto-deleted when removed)"), w);
+    m_warp_temp_chk = new FvTickCheckBox(tr("Use a temporary output file (auto-deleted when removed)"), w);
     m_warp_temp_chk->setChecked(true);
     frm->addRow(QString(), m_warp_temp_chk);
 
-    m_warp_display_chk = new QCheckBox(tr("Add result to a pane"), w);
+    m_warp_display_chk = new FvTickCheckBox(tr("Add result to a pane"), w);
     m_warp_display_chk->setChecked(true);
     frm->addRow(QString(), m_warp_display_chk);
 

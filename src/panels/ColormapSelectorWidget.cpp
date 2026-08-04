@@ -1,6 +1,7 @@
 #include "panels/ColormapSelectorWidget.hpp"
 #include "core/RasterLayer.hpp"
 #include "core/ColormapRegistry.hpp"
+#include "widgets/UiKit.hpp"          // FvTickCheckBox, fvMakeSection
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -8,15 +9,8 @@
 #include <QLabel>
 
 ColormapSelectorWidget::ColormapSelectorWidget(QWidget* parent) : QWidget(parent) {
-    auto* frame = new QFrame(this);
-    frame->setObjectName("sectionBox");
-    frame->setStyleSheet(
-        "QFrame#sectionBox { border: 1px solid palette(mid); border-radius: 3px; }");
-
-    auto* frameLay = new QVBoxLayout(frame);
-    frameLay->setContentsMargins(8, 8, 8, 8);
-    frameLay->setSpacing(6);
-    frameLay->addWidget(new QLabel(tr("<b>Colormap</b>"), frame));
+    QVBoxLayout* frameLay = nullptr;
+    auto* frame = fvMakeSection(tr("Colormap"), frameLay, this);
 
     auto* row1 = new QHBoxLayout();
     row1->setContentsMargins(0, 0, 0, 0);
@@ -29,7 +23,7 @@ ColormapSelectorWidget::ColormapSelectorWidget(QWidget* parent) : QWidget(parent
     row1->addWidget(m_combo, 1);   // stretch to the column width
     frameLay->addLayout(row1);
 
-    m_invert_cb = new QCheckBox(tr("Invert"), frame);
+    m_invert_cb = new FvTickCheckBox(tr("Invert"), frame);
     frameLay->addWidget(m_invert_cb);
 
     auto* outerLay = new QVBoxLayout(this);
