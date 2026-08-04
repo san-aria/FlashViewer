@@ -219,6 +219,14 @@ private:
     QElapsedTimer m_repaint_clock;
     bool          m_repaint_timed_out{false};
 
+    // The canonical world view: the FULL longitude range centred on the prime meridian, so
+    // the Americas sit left of centre and Asia/India to the right, plus Mercator's usable
+    // latitude band. One definition, shared by the startup view, Fit with no layers, and
+    // resetToWorldView().
+    static Extent worldExtent() { return Extent{-180.0, -85.0, 180.0, 85.0}; }
+    void fitCameraToWorld();
+
+    bool    m_initial_view_done{false};   // world view applied on first sizing
     bool    m_gl_ready{false};  // true only after initializeGL() fully succeeds
     bool    m_dark_bg{true};
     bool    m_inspect_mode{false};

@@ -50,6 +50,37 @@ TEST_CASE("TC-NAV-02 wheel zoom keeps the geo point under the cursor fixed", "[n
     REQUIRE(cam.scale() < scale_before);   // geo-units-per-pixel decreased (zoomed in)
 }
 
+// TC-NAV-06 — the world view is drawn as a world MAP: prime meridian centred, western
+// hemisphere on the left, eastern on the right. Guards the orientation itself (an axis
+// flip or an off-centre world extent would break it), independently of how MapCanvas
+// happens to apply it.
+TEST_CASE("TC-NAV-06 world view centres the prime meridian, west left / east right",
+          "[nav][camera]") {
+    Camera cam;
+    cam.setViewportSize(1200, 700);
+    cam.fitToExtent(Extent{-180.0, -85.0, 180.0, 85.0});   // MapCanvas::worldExtent()
+
+    // Centred on lon 0 (Greenwich), not on the antimeridian.
+    CHECK_THAT(cam.center().x, Catch::Matchers::WithinAbs(0.0, 1e-9));
+    CHECK_THAT(cam.center().y, Catch::Matchers::WithinAbs(0.0, 1e-9));
+
+    const double mid = 1200 / 2.0;
+    const double us    = cam.geoToScreen(-98.0,  39.0).x;   // continental US
+    const double india = cam.geoToScreen( 78.0,  21.0).x;   // India
+    const double gmt   = cam.geoToScreen(  0.0,   0.0).x;
+
+    CHECK(us < gmt);        // negative longitudes to the LEFT of centre
+    CHECK(india > gmt);     // positive longitudes to the RIGHT of centre
+    CHECK(us < india);
+    CHECK_THAT(gmt, Catch::Matchers::WithinAbs(mid, 1e-6));
+
+    // The whole ±180 range is on screen (fitToExtent pads by 5%), so a world view shows
+    // one world rather than running off either edge.
+    const Extent vis = cam.visibleExtent();
+    CHECK(vis.xmin <= -180.0);
+    CHECK(vis.xmax >=  180.0);
+}
+
 TEST_CASE("TC-NAV-03 fit-all shows the union of all layer extents", "[nav][camera]") {
     const Extent a{0, 0, 10, 10};
     const Extent b{40, 30, 60, 50};

@@ -349,6 +349,20 @@ void MapCanvas::resizeGL(int w, int h) {
     if (!m_gl_ready) return;
     glViewport(0, 0, w, h);
     m_camera.setViewportSize(w, h);
+
+    // First real sizing: park the camera on the canonical world view, so the basemap opens
+    // as a world map — prime meridian centred, Americas left, Asia right. Without this the
+    // camera keeps Camera{}'s defaults (centre 0,0 at 1 degree per pixel), which on a
+    // typical viewport spans ~1000 degrees: the basemap then arrives as several wrapped
+    // copies of the world instead of one. Guarded so it can never override a pane that
+    // already has content, is driven by a sync group, or works in a projected CRS.
+    if (!m_initial_view_done && w > 0 && h > 0) {
+        m_initial_view_done = true;
+        if (paneLayerCount() == 0 && m_sync_role == 0 && m_project_wkt.empty()) {
+            m_camera.fitToExtent(worldExtent());
+            emitZoomLevel();   // not cameraChanged: this runs inside a resize
+        }
+    }
 }
 
 void MapCanvas::resizeEvent(QResizeEvent* event) {
@@ -793,8 +807,7 @@ void MapCanvas::resetToWorldView() {
         emit projectCrsChanged(QString());
     }
     m_osm_renderer->setProjectCrs(std::string());   // geographic (identity)
-    m_camera.setViewportSize(width(), height());
-    m_camera.fitToExtent(Extent{-180.0, -85.0, 180.0, 85.0});
+    fitCameraToWorld();
     update();
     emit cameraChanged(m_camera);
     emitZoomLevel();
@@ -827,9 +840,26 @@ void MapCanvas::setCameraFromSync(const Camera& cam, const std::string& src_wkt)
     setCamera(adjusted);
 }
 
+void MapCanvas::fitCameraToWorld() {
+    m_camera.setViewportSize(width(), height());
+    m_camera.fitToExtent(worldExtent());
+}
+
 void MapCanvas::fitToLayers() {
     auto pane_layers = paneLayers();
-    if (pane_layers.empty()) return;
+    if (pane_layers.empty()) {
+        // No layers, but the basemap is still drawn — fit the world instead of doing
+        // nothing, so Fit All re-centres on the prime meridian. That is also the way back
+        // after panning east or west into a wrapped world copy. Only meaningful while the
+        // pane is geographic: under a projected Project CRS the +/-180 degree extent is not
+        // this pane's world, so the old no-op stands.
+        if (!m_project_wkt.empty() && !m_project_is_geographic) return;
+        fitCameraToWorld();
+        update();
+        emit cameraChanged(m_camera);
+        emitZoomLevel();
+        return;
+    }
 
     Extent combined = Extent::invalid();
     for (const auto& l : pane_layers) {
