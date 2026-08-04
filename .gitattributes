@@ -1,0 +1,42 @@
+# Line endings
+# ---------------------------------------------------------------------------
+# Store text with LF in the repository; check it out with the platform's native
+# endings. Without this, the result depends on each contributor's core.autocrlf
+# setting — which is what produced the "LF will be replaced by CRLF the next
+# time Git touches it" warnings when staging on Windows. Declaring it here makes
+# the normalisation a property of the repo instead of the machine.
+#
+# This matches what the repository already contains (LF blobs), so adding it
+# renormalises nothing.
+* text=auto
+
+# Endings that are load-bearing regardless of platform: a shell script with CRLF
+# fails to execute, and some Windows tooling still requires CRLF batch files.
+*.sh    text eol=lf
+*.bash  text eol=lf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# Binary assets Git must never transform or attempt to line-diff. None are
+# tracked today; these guard raster test fixtures and packaging artefacts from
+# being corrupted by newline conversion if they are ever added.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.icns  binary
+*.tif   binary
+*.tiff  binary
+*.jp2   binary
+*.nc    binary
+*.hdf   binary
+*.h5    binary
+*.hdf5  binary
+*.img   binary
+*.bin   binary
+*.raw   binary
+*.dat   binary
+*.zip   binary
+*.dmg   binary
+*.qm    binary
