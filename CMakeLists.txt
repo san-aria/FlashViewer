@@ -1,6 +1,14 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(FlashViewer VERSION 0.1.0 LANGUAGES CXX)
+# The VERSION file at the repo root is the single source of truth. Read it here,
+# BEFORE project(), so PROJECT_VERSION, the generated version.h (cmake/Version.cmake)
+# and the runtime string all come from one place. Previously this line carried a
+# literal that had to be hand-synced with VERSION, and Application.cpp carried a
+# third copy — which is how the app kept announcing "FlashViewer 0.1.0".
+file(READ "${CMAKE_CURRENT_LIST_DIR}/VERSION" FLASHVIEWER_VERSION_STRING)
+string(STRIP "${FLASHVIEWER_VERSION_STRING}" FLASHVIEWER_VERSION_STRING)
+
+project(FlashViewer VERSION ${FLASHVIEWER_VERSION_STRING} LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

@@ -3,6 +3,8 @@
 #include "util/Logger.hpp"
 #include "util/ErrorReporter.hpp"
 
+#include "version.h"                   // FLASHVIEWER_VERSION_STRING (generated from ./VERSION)
+
 #include <QFile>
 #include <QPalette>
 #include <QStyle>
@@ -14,7 +16,8 @@ Application::Application(int& argc, char** argv)
 {
     setApplicationName("FlashViewer");
     setOrganizationName("FlashViewer");
-    setApplicationVersion("0.1.0");
+    // Never a literal — this is what the startup banner and the About box report.
+    setApplicationVersion(FLASHVIEWER_VERSION_STRING);
 
     // Fusion style gives a consistent cross-platform look
     setStyle(QStyleFactory::create("Fusion"));

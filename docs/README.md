@@ -7,7 +7,7 @@
 ![CI Windows](https://github.com/san-aria/FlashViewer/actions/workflows/ci-windows.yml/badge.svg?branch=main)
 ![CI Linux (conda)](https://github.com/san-aria/FlashViewer/actions/workflows/ci-linux-conda.yml/badge.svg?branch=main)
 ![CI macOS (conda)](https://github.com/san-aria/FlashViewer/actions/workflows/ci-macos-conda.yml/badge.svg?branch=main)
-![Version](https://img.shields.io/badge/version-0.1.0-blue)
+![Version](https://img.shields.io/badge/version-0.2.0-blue)
 
 ## Overview
 
