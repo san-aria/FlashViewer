@@ -894,16 +894,8 @@ void LayerPanel::onContextMenu(const QPoint& pos) {
     auto* actRemove = menu.addAction(tr("Remove"));
     auto* actFit    = menu.addAction(tr("Fit to Layer"));
 
-    // "Show Colorbar" (Phase 7 follow-up): only meaningful for a grayscale raster (RGB has no
-    // colorbar). Checkable, reflecting this layer's per-layer legend-visibility flag.
-    QAction* actColorbar = nullptr;
-    if (auto l = m_mgr->layerAt(idx);
-        l && l->type() == LayerType::Raster &&
-        static_cast<RasterLayer*>(l.get())->bandMapping().isGrayscale()) {
-        actColorbar = menu.addAction(tr("Show Colorbar"));
-        actColorbar->setCheckable(true);
-        actColorbar->setChecked(static_cast<RasterLayer*>(l.get())->legendVisible());
-    }
+    // NOTE: no "Show Colorbar" here — colorbar visibility is a PANE setting, offered by the
+    // pane gear menu alone (user decision).
 
     // "To Pane" submenu (Phase 6.3): reassign this layer to a pane (exclusive; the layer's
     // current pane is tick-marked).
@@ -942,11 +934,6 @@ void LayerPanel::onContextMenu(const QPoint& pos) {
         m_mgr->removeLayer(idx);
     } else if (chosen == actFit) {
         emit fitToLayerRequested(idx);
-    } else if (actColorbar && chosen == actColorbar) {
-        if (auto l = m_mgr->layerAt(idx); l && l->type() == LayerType::Raster) {
-            static_cast<RasterLayer*>(l.get())->setLegendVisible(chosen->isChecked());
-            m_mgr->notifyLayerChanged(idx);   // → layerChanged → MainWindow::updatePaneLegends
-        }
     }
 }
 
