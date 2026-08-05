@@ -54,7 +54,14 @@ void Application::applyTheme(Theme t) {
         palette.setColor(QPalette::Highlight,       QColor(0x1f, 0x6f, 0xeb));  // accent-emphasis
         palette.setColor(QPalette::HighlightedText, QColor(0xe6, 0xed, 0xf3));
         palette.setColor(QPalette::Link,            QColor(0x58, 0xa6, 0xff));  // accent-fg
-        palette.setColor(QPalette::Mid,             QColor(0x30, 0x36, 0x3d));  // border-default
+        // Mid is this app's MUTED role: hint text, de-emphasised captions, self-painted
+        // outlines (section frames, tick boxes, the New-Pane picker). It used to be
+        // border-default #30363d, which is a chrome colour — as text on canvas-default it
+        // sat at ~1.3:1 and simply could not be read. fg-muted #8b949e gives ~6.2:1 while
+        // staying quieter than fg-default, and it is the grey dark.qss already uses for a
+        // hovered button border. Widget chrome is unaffected: the QSS hard-codes #30363d
+        // for its own borders rather than going through the palette.
+        palette.setColor(QPalette::Mid,             QColor(0x8b, 0x94, 0x9e));  // fg-muted
         palette.setColor(QPalette::Midlight,        QColor(0x21, 0x26, 0x2d));
         palette.setColor(QPalette::Shadow,          QColor(0x01, 0x04, 0x09));  // canvas-inset
         palette.setColor(QPalette::Disabled, QPalette::Text,       QColor(0x48, 0x4f, 0x58));
@@ -75,7 +82,9 @@ void Application::applyTheme(Theme t) {
         palette.setColor(QPalette::Highlight,       QColor(0x09, 0x69, 0xda));  // accent-emphasis
         palette.setColor(QPalette::HighlightedText, QColor(0xff, 0xff, 0xff));
         palette.setColor(QPalette::Link,            QColor(0x09, 0x69, 0xda));  // accent-fg
-        palette.setColor(QPalette::Mid,             QColor(0xaf, 0xb8, 0xc1));
+        // Mirror of the dark theme's muted role (see there). #afb8c1 on canvas-default was
+        // ~2.0:1 — legible only as a hairline, never as text; fg-muted #6e7781 gives ~4.7:1.
+        palette.setColor(QPalette::Mid,             QColor(0x6e, 0x77, 0x81));  // fg-muted
         palette.setColor(QPalette::Midlight,        QColor(0xea, 0xee, 0xf2));
         palette.setColor(QPalette::Shadow,          QColor(0x81, 0x8b, 0x98));
         palette.setColor(QPalette::Disabled, QPalette::Text,       QColor(0x8c, 0x95, 0x9f));
