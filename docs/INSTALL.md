@@ -489,7 +489,7 @@ hand.)
 
 ### 3.1 Run the test suite
 
-The test suite contains 132 Catch2 tests covering geo-transforms, settings,
+The test suite contains 137 Catch2 tests covering geo-transforms, settings,
 colormaps, the tile cache, the Phase 0 test-infrastructure harnesses
 (fixtures / GDAL oracle / mock network / offscreen-GL), the application shell
 (theme, layout persistence, licenses manifest), raster opening/formats
@@ -501,7 +501,8 @@ render pipeline, LOD selection, the navigation camera (pan / zoom / fit /
 screen↔geo round-trip), value⇄percentile stretch conversions and auto-stretch
 statistics, the colorbar corner re-anchor, the world view presented on open and on
 Fit, the basemap's longitude wrap-copy range and its sub-pixel Mercator row
-tessellation. Tests that need an unavailable capability skip gracefully
+tessellation, and the New-Pane position picker's slot → (layout mode, region)
+mapping. Tests that need an unavailable capability skip gracefully
 — the offscreen-GL render tests when no OpenGL 4.1 context is present, and the
 NetCDF subdataset tests when the GDAL netCDF driver is absent.
 

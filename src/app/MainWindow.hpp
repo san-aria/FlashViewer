@@ -6,6 +6,7 @@
 #include <QPixmap>
 #include "app/Settings.hpp"
 #include "panels/NoDataWidget.hpp"
+#include "render/PaneLayoutMode.hpp"   // applyPaneLayoutMode / the View → Pane Layout radio
 #include <memory>
 #include <optional>
 #include <string>
@@ -60,9 +61,9 @@ private slots:
     void onActiveLayerChanged(int index);
     // `label` empty ⇒ the auto default ("Pane N", N one past the highest number in use).
     MapCanvas* addPane(const QString& label = QString());
-    // View → New Pane / toolbar: ask for the new pane's name (pre-filled with the default)
-    // before creating it. Panes created implicitly (a layer dropped on an empty region, a
-    // Tools dialog's "New Pane" output) skip the prompt and take the default.
+    // View → New Pane / toolbar: ask for the new pane's name AND its position (a Windows-11
+    // style snap picker) before creating it. Panes created implicitly (a layer dropped on an
+    // empty region, a Tools dialog's "New Pane" output) skip the prompt and take the default.
     void       addPaneInteractive();
     void removeActivePane();
     void appendLog(int level, const QString& text);
@@ -118,6 +119,10 @@ private:
     // Connect a pane's per-canvas signals (cursor/zoom/inspect/activation) so the
     // status bar and inspector follow whichever pane the user interacts with.
     void       wireCanvasSignals(MapCanvas* canvas);
+    // Switch the pane layout and keep the View → Pane Layout radio in step. The ONLY way the
+    // mode should change: the New-Pane snap picker changes it programmatically, and a stale
+    // tick there would misreport the layout the user is looking at.
+    void       applyPaneLayoutMode(PaneLayoutMode m);
 
     // View → Panels: re-open closed docks at their fresh-build location (FR-APP-9).
     // A dock tracked with its default area + tab partner so it can be restored exactly.
@@ -191,6 +196,11 @@ private:
     // kept so onActiveLayerChanged can reflect the active layer's current mode.
     QActionGroup*          m_resample_group{nullptr};
     QAction*               m_resample_acts[3]{nullptr, nullptr, nullptr};
+
+    // View → Pane Layout (FR-PNE-8): the 4 checkable mode actions, indexed Full / HalfH /
+    // HalfV / Quarter, kept so applyPaneLayoutMode can re-tick them after a programmatic
+    // mode change.
+    QAction*               m_layout_acts[4]{nullptr, nullptr, nullptr, nullptr};
 
     // View → Panels (FR-APP-9): tracked docks + pristine default layout snapshot.
     QVector<DockEntry>     m_docks;

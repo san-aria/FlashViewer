@@ -9,6 +9,7 @@ qt_add_executable(FlashViewer
     app/GpuInfoDialog.hpp app/GpuInfoDialog.cpp
     app/AboutLicensesDialog.hpp app/AboutLicensesDialog.cpp
     app/NetCdfAssignDialog.hpp app/NetCdfAssignDialog.cpp
+    app/NewPaneDialog.hpp app/NewPaneDialog.cpp
 
     # Core data model
     core/Extent.hpp
@@ -43,6 +44,7 @@ qt_add_executable(FlashViewer
     render/SyncGroup.hpp        render/SyncGroup.cpp
     render/Pane.hpp             render/Pane.cpp
     render/PaneLayoutMode.hpp
+    render/PaneSlot.hpp
     render/PaneRegion.hpp       render/PaneRegion.cpp
     render/PaneLayout.hpp       render/PaneLayout.cpp
     render/OsmTileRenderer.hpp        render/OsmTileRenderer.cpp

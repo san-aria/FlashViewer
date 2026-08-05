@@ -3,6 +3,7 @@
 #include "app/GpuInfoDialog.hpp"
 #include "app/AboutLicensesDialog.hpp"
 #include "app/NetCdfAssignDialog.hpp"
+#include "app/NewPaneDialog.hpp"
 #include "app/Settings.hpp"
 #include "plots/SpectralPlotWindow.hpp"
 #include "plots/ScanPixProfileWindow.hpp"
@@ -727,17 +728,16 @@ void MainWindow::setupMenuBar() {
         { QT_TR_NOOP("Half - &Top/Bottom"),   PaneLayoutMode::HalfV   },
         { QT_TR_NOOP("&Quarter (2x2)"),       PaneLayoutMode::Quarter },
     };
-    for (const auto& it : layoutItems) {
+    // The action order here IS the m_layout_acts index order applyPaneLayoutMode uses.
+    for (int i = 0; i < 4; ++i) {
+        const auto& it = layoutItems[i];
         auto* act = layoutMenu->addAction(tr(it.text));
         act->setCheckable(true);
         act->setChecked(it.mode == m_pane_layout->mode());
         layoutGroup->addAction(act);
+        m_layout_acts[i] = act;
         const PaneLayoutMode mode = it.mode;
-        connect(act, &QAction::triggered, this, [this, mode] {
-            m_pane_layout->setMode(mode);
-            // Keep the active pane visible + selected after the regions are rebuilt.
-            m_pane_layout->showPaneInRegion(activePaneId());
-        });
+        connect(act, &QAction::triggered, this, [this, mode] { applyPaneLayoutMode(mode); });
     }
 
     // ---- Tools ----
@@ -1527,16 +1527,57 @@ void MainWindow::assignLayerToPane(int layerIndex, uint64_t paneId) {
     FV_INFO("Layer {} reassigned to pane id {}", layerIndex, paneId);
 }
 
+void MainWindow::applyPaneLayoutMode(PaneLayoutMode m) {
+    m_pane_layout->setMode(m);
+    // Keep the active pane visible + selected after the regions are rebuilt.
+    m_pane_layout->showPaneInRegion(activePaneId());
+    // Re-tick the menu. setChecked emits `toggled`, not `triggered`, so this cannot recurse
+    // back into the lambda above.
+    int idx = 0;
+    switch (m) {
+        case PaneLayoutMode::Full:    idx = 0; break;
+        case PaneLayoutMode::HalfH:   idx = 1; break;
+        case PaneLayoutMode::HalfV:   idx = 2; break;
+        case PaneLayoutMode::Quarter: idx = 3; break;
+    }
+    if (m_layout_acts[idx]) m_layout_acts[idx]->setChecked(true);
+}
+
 void MainWindow::addPaneInteractive() {
-    // Ask for the name before creating the pane, pre-filled with the default the pane would
-    // get anyway ("Pane N", N one past the highest number currently on the canvas — so a
-    // closed Pane 2 frees that name again). Cancel aborts; a blank entry takes the default.
-    bool ok = false;
-    const QString suggested = m_pane_layout->nextPaneLabel();
-    const QString name = QInputDialog::getText(this, tr("New Pane"), tr("Pane name:"),
-                                               QLineEdit::Normal, suggested, &ok);
-    if (!ok) return;
-    addPane(name.trimmed().isEmpty() ? suggested : name.trimmed());
+    // Ask for the name AND the position before creating the pane. The name is pre-filled with
+    // the default the pane would get anyway ("Pane N", N one past the highest number currently
+    // on the canvas — so a closed Pane 2 frees that name again); the position picker offers
+    // every cell of every layout preset, pre-selecting the first free region of the current
+    // one. Cancel aborts; a blank name takes the default.
+    QVector<ExistingPaneInfo> panes;
+    panes.reserve(m_pane_layout->paneCount());
+    int activeIdx = 0;
+    const uint64_t activeId = activePaneId();
+    for (int i = 0; i < m_pane_layout->paneCount(); ++i) {
+        panes.push_back({ m_pane_layout->paneLabel(i), m_pane_layout->paneColor(i),
+                          m_pane_layout->regionOfPane(i) });
+        if (m_pane_layout->paneId(i) == activeId) activeIdx = i;
+    }
+
+    NewPaneDialog dlg(m_pane_layout->nextPaneLabel(), m_pane_layout->mode(),
+                      panes, activeIdx, this);
+    if (dlg.exec() != QDialog::Accepted) return;
+
+    // Switch the layout FIRST. setMode redistributes the existing panes by the auto-fill rule
+    // — which is exactly what the picker previewed — so the new pane's target region is only
+    // meaningful once the mode it belongs to is in force.
+    const PaneSlotTarget target = fvSlotTarget(dlg.slot());
+    if (target.mode != m_pane_layout->mode()) applyPaneLayoutMode(target.mode);
+
+    MapCanvas* canvas = addPane(dlg.paneName());
+    const int idx = m_pane_layout->indexOfCanvas(canvas);
+    if (idx >= 0) {
+        // Auto-fill may already have landed it elsewhere; movePaneToRegion also brings it to
+        // the front of the target region's stack and re-activates it.
+        m_pane_layout->movePaneToRegion(m_pane_layout->paneId(idx), target.region);
+        FV_INFO("New pane placed in region {} of layout mode {}",
+                target.region, static_cast<int>(target.mode));
+    }
 }
 
 MapCanvas* MainWindow::addPane(const QString& label) {

@@ -7,12 +7,15 @@
 #include "core/LayerManager.hpp"       // capacity + reorder (TC-CAP-01 / TC-LYR-02)
 #include "render/Pane.hpp"   // fvPaneColor
 #include "render/PaneLayoutMode.hpp"   // fvRegionCount / fvRegionForPane (TC-PNE-08)
+#include "render/PaneSlot.hpp"         // New-Pane snap-picker slot mapping (TC-PNE-13)
 #include "render/SyncGroup.hpp"        // camera broadcast (TC-PNE-02/03)
 #include "render/Camera.hpp"
 
 #include <QObject>
+#include <iterator>   // std::size
 #include <memory>
 #include <set>
+#include <utility>    // std::pair
 #include <vector>
 
 namespace {
@@ -167,6 +170,100 @@ TEST_CASE("fvRegionForPane auto-fills then stacks overflow in the last region",
     // Negative / degenerate inputs are clamped to region 0 (no crash).
     REQUIRE(fvRegionForPane(-1, 4) == 0);
     REQUIRE(fvRegionForPane(3, 0)  == 0);
+}
+
+TEST_CASE("Every pane slot names a real region of its own layout mode", "[pane][TC-PNE-13]") {
+    // FR-PNE-13: the New-Pane picker offers one slot per cell of the four presets — 1+2+2+4.
+    const PaneSlot all[] = {
+        PaneSlot::Full,
+        PaneSlot::Left,       PaneSlot::Right,
+        PaneSlot::Top,        PaneSlot::Bottom,
+        PaneSlot::TopLeft,    PaneSlot::TopRight,
+        PaneSlot::BottomLeft, PaneSlot::BottomRight,
+    };
+    REQUIRE(std::size(all) == static_cast<size_t>(kFvPaneSlotCount));
+
+    // Every slot's region is in range for the mode it names — the invariant that stops the
+    // dialog handing PaneLayout::movePaneToRegion an index the rebuilt tree has no region for.
+    std::set<std::pair<int, int>> seen;
+    for (PaneSlot s : all) {
+        const PaneSlotTarget t = fvSlotTarget(s);
+        REQUIRE(t.region >= 0);
+        REQUIRE(t.region < fvRegionCount(t.mode));
+        // (mode, region) pairs are unique: no two slots fight over the same cell.
+        REQUIRE(seen.insert({static_cast<int>(t.mode), t.region}).second);
+    }
+    // ...and between them they cover every region of every mode.
+    REQUIRE(seen.size() == 1u + 2u + 2u + 4u);
+}
+
+TEST_CASE("fvSlotTarget / fvSlotFor round-trip", "[pane][TC-PNE-13]") {
+    // Quadrant slots must map onto PaneLayout::rebuildTree()'s region wiring exactly:
+    // 0 = top-left, 1 = top-right, 2 = bottom-left, 3 = bottom-right.
+    REQUIRE(fvSlotTarget(PaneSlot::TopLeft).region     == 0);
+    REQUIRE(fvSlotTarget(PaneSlot::TopRight).region    == 1);
+    REQUIRE(fvSlotTarget(PaneSlot::BottomLeft).region  == 2);
+    REQUIRE(fvSlotTarget(PaneSlot::BottomRight).region == 3);
+    REQUIRE(fvSlotTarget(PaneSlot::BottomRight).mode   == PaneLayoutMode::Quarter);
+    REQUIRE(fvSlotTarget(PaneSlot::Right).mode         == PaneLayoutMode::HalfH);
+    REQUIRE(fvSlotTarget(PaneSlot::Bottom).mode        == PaneLayoutMode::HalfV);
+
+    for (PaneLayoutMode m : {PaneLayoutMode::Full, PaneLayoutMode::HalfH,
+                             PaneLayoutMode::HalfV, PaneLayoutMode::Quarter}) {
+        for (int r = 0; r < fvRegionCount(m); ++r) {
+            const PaneSlotTarget t = fvSlotTarget(fvSlotFor(m, r));
+            REQUIRE(t.mode   == m);
+            REQUIRE(t.region == r);
+        }
+        // An out-of-range region can never name a slot from another mode.
+        REQUIRE(fvSlotTarget(fvSlotFor(m, 99)).mode  == m);
+        REQUIRE(fvSlotTarget(fvSlotFor(m, -1)).region == 0);
+    }
+}
+
+TEST_CASE("fvSlotChangesLayout flags the picks that force a mode switch", "[pane][TC-PNE-13]") {
+    // The whole point of the feature: a quadrant chosen while split in halves must switch the
+    // layout to Quarter; a half chosen while already in that half-mode must not.
+    REQUIRE(fvSlotChangesLayout(PaneSlot::BottomRight, PaneLayoutMode::HalfH));
+    REQUIRE(fvSlotChangesLayout(PaneSlot::BottomRight, PaneLayoutMode::Full));
+    REQUIRE(fvSlotChangesLayout(PaneSlot::Left,        PaneLayoutMode::HalfV));
+    REQUIRE_FALSE(fvSlotChangesLayout(PaneSlot::Left,        PaneLayoutMode::HalfH));
+    REQUIRE_FALSE(fvSlotChangesLayout(PaneSlot::Right,       PaneLayoutMode::HalfH));
+    REQUIRE_FALSE(fvSlotChangesLayout(PaneSlot::Bottom,      PaneLayoutMode::HalfV));
+    REQUIRE_FALSE(fvSlotChangesLayout(PaneSlot::Full,        PaneLayoutMode::Full));
+    REQUIRE_FALSE(fvSlotChangesLayout(PaneSlot::TopLeft,     PaneLayoutMode::Quarter));
+}
+
+TEST_CASE("fvLayoutGrid tiles every region of its mode, row-major", "[pane][TC-PNE-13]") {
+    for (PaneLayoutMode m : {PaneLayoutMode::Full, PaneLayoutMode::HalfH,
+                             PaneLayoutMode::HalfV, PaneLayoutMode::Quarter}) {
+        int cols = 0, rows = 0;
+        fvLayoutGrid(m, cols, rows);
+        REQUIRE(cols * rows == fvRegionCount(m));   // no cell without a region, or vice versa
+    }
+    int cols = 0, rows = 0;
+    fvLayoutGrid(PaneLayoutMode::HalfH, cols, rows);
+    REQUIRE((cols == 2 && rows == 1));     // side-by-side is 2 wide
+    fvLayoutGrid(PaneLayoutMode::HalfV, cols, rows);
+    REQUIRE((cols == 1 && rows == 2));     // top/bottom is 2 tall
+}
+
+TEST_CASE("fvRegionAfterModeChange predicts what redistributePanes will do",
+          "[pane][TC-PNE-13]") {
+    // The picker's dots must show where the existing panes ACTUALLY end up. PaneLayout only
+    // re-derives assignments when the mode changes (setMode → redistributePanes); within the
+    // current mode a pane keeps wherever it was dragged, so the preview must too.
+    //
+    // Pane 0 dragged to the right half, pane 1 left — the reverse of auto-fill.
+    REQUIRE(fvRegionAfterModeChange(0, 1, PaneLayoutMode::HalfH, PaneLayoutMode::HalfH) == 1);
+    REQUIRE(fvRegionAfterModeChange(1, 0, PaneLayoutMode::HalfH, PaneLayoutMode::HalfH) == 0);
+    // Switching to Quarter throws that away and auto-fills by pane index.
+    REQUIRE(fvRegionAfterModeChange(0, 1, PaneLayoutMode::HalfH, PaneLayoutMode::Quarter) == 0);
+    REQUIRE(fvRegionAfterModeChange(1, 0, PaneLayoutMode::HalfH, PaneLayoutMode::Quarter) == 1);
+    // Collapsing to Full puts everything in the single region.
+    REQUIRE(fvRegionAfterModeChange(3, 3, PaneLayoutMode::Quarter, PaneLayoutMode::Full) == 0);
+    // Overflow panes stack in the last region, matching fvRegionForPane.
+    REQUIRE(fvRegionAfterModeChange(7, 0, PaneLayoutMode::Full, PaneLayoutMode::Quarter) == 3);
 }
 
 TEST_CASE("LayerManager holds >=32 layers, partitioned across 4 panes", "[pane][TC-CAP-01]") {
