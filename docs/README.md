@@ -105,10 +105,11 @@ Multi-variable files (NetCDF, HDF5) open through a **Select Variables** dialog l
 
 - Toggleable XYZ tile basemap rendered beneath all raster layers (which composite over it bottom-to-top); **off by default** on every launch
 - Reprojected into the pane's project CRS so it co-registers **under projected (e.g. UTM) layers**, not only geographic ones — pixel-accurate via per-tile tessellation (each vertex individually transformed), re-warped when the pane's CRS changes
-- Returns to a world view when all layers are cleared (or when enabled with no layers loaded), so the basemap never gets stranded off-screen
+- Opens on a **world view centred on the prime meridian** and returns to it when all layers are cleared, when enabled with no layers loaded, or on **Fit** (`Space`) with nothing loaded — so the basemap never gets stranded off-screen and Fit is always the way back
 - Standard `{z}/{x}/{y}` URL template; tile source is configurable
 - 512 MB local disk cache (`~/.cache/FlashViewer/osm/`) via `QNetworkDiskCache`
-- Antimeridian wrap handled correctly
+- **Repeats in longitude**: an XYZ grid covers ±180° exactly once, so the world is drawn as copies of the grid, one per 360° in view, joined seamlessly at the antimeridian. Panning into a copy costs draw calls only — never extra downloads
+- **Sub-pixel latitude placement at every zoom**: a Web Mercator tile's texture rows are evenly spaced in Mercator *y*, not in latitude, so each tile is subdivided into rows taken from the exact inverse Mercator (row count derived from the error, decaying to a single quad where one is already accurate). Basemap coastlines line up with a global lon/lat raster's land mask **at world zoom**, not only zoomed in
 
 ### GDAL Operations
 
@@ -211,7 +212,8 @@ LRU cache with a default capacity of 512 tiles. Cache key: `TileKey = {layer_id,
 
 | Version | Date | Notes |
 |---|---|---|
-| 0.1.0 | 2026-07-22 | **Complete base release.** Implementation revamp Phases 0–12 (test infrastructure, rendering/resampling, multi-pane + sync, on-the-fly per-pane CRS reprojection, GDAL ops, error handling & SSRF guard, performance instrumentation + HUD) closed by the Phase-14 conformance sync; Linux, macOS, and Windows CI; **113 automated tests passing**. Accessibility, i18n, packaging/installers, and the license audit are deferred to 0.2.0 (SRS Appendix E). |
+| 0.2.0 | *in development* | Post-0.1.0 manual-test findings (Phases 15–19: opacity & colorbar, per-pane CRS on layer move, Layer Panel overhaul with pane grouping + multi-select, NetCDF/HDF multi-band variable stack), then: the product version single-sourced from the root `VERSION` file; one shared implementation for the tick checkbox and section-heading idioms across every panel and dialog; the basemap repeating correctly in longitude and placed to sub-pixel accuracy in latitude; and a world view on open and on Fit. **132 automated tests passing** on Linux and Windows. Accessibility, i18n, packaging/installers and the license audit remain outstanding (SRS Appendix E). |
+| 0.1.0 | 2026-07-22 | **Released base.** Implementation revamp Phases 0–12 (test infrastructure, rendering/resampling, multi-pane + sync, on-the-fly per-pane CRS reprojection, GDAL ops, error handling & SSRF guard, performance instrumentation + HUD) closed by the Phase-14 conformance sync; Linux, macOS, and Windows CI; **113 automated tests passing**. Accessibility, i18n, packaging/installers, and the license audit are deferred to 0.2.0 (SRS Appendix E). |
 
 ## Building
 

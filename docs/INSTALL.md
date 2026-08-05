@@ -461,11 +461,35 @@ See `environment-linux.yml` / `environment-macos.yml` for the full notes.
 
 ---
 
+### 2.7 Notes for contributors
+
+Two repository-level conventions worth knowing before your first commit.
+
+**Line endings are normalised by the repo, not by your Git config.**
+[`.gitattributes`](../.gitattributes) declares `* text=auto`, so text files are stored as
+LF and checked out with your platform's native endings; `.sh` / `.bash` are pinned to LF
+and `.bat` / `.cmd` to CRLF, where the ending is load-bearing rather than cosmetic; and
+raster and archive extensions are marked binary so a test fixture or packaging artefact
+cannot be corrupted by newline conversion. You do **not** need to set `core.autocrlf` —
+with it declared in the repo, a Linux clone and a Windows clone produce identical blobs.
+It renormalises nothing already committed: `git add --renormalize .` restages no file that
+was not already modified.
+
+**The product version lives in exactly one file.** The root [`VERSION`](../VERSION) file is
+authoritative. `CMakeLists.txt` reads it before `project()`, `cmake/Version.cmake` generates
+`build/<preset>/generated/version.h` with `FLASHVIEWER_VERSION_STRING`, and
+`src/app/Application.cpp` uses that for `setApplicationVersion` — which is what the startup
+log banner and **Help → Licenses** report. To cut a new version, edit `VERSION` and rebuild;
+do not add a literal anywhere else. (The README badge is the one copy that is updated by
+hand.)
+
+---
+
 ## 3. Verifying the Installation
 
 ### 3.1 Run the test suite
 
-The test suite contains 129 Catch2 tests covering geo-transforms, settings,
+The test suite contains 132 Catch2 tests covering geo-transforms, settings,
 colormaps, the tile cache, the Phase 0 test-infrastructure harnesses
 (fixtures / GDAL oracle / mock network / offscreen-GL), the application shell
 (theme, layout persistence, licenses manifest), raster opening/formats
@@ -475,7 +499,9 @@ rendering and no-data edge-bleed suppression, selectable display resampling
 (bilinear / bicubic B-spline / bicubic Catmull-Rom), the RGB/pseudocolor/opacity
 render pipeline, LOD selection, the navigation camera (pan / zoom / fit /
 screen↔geo round-trip), value⇄percentile stretch conversions and auto-stretch
-statistics, and the colorbar corner re-anchor. Tests that need an unavailable capability skip gracefully
+statistics, the colorbar corner re-anchor, the world view presented on open and on
+Fit, the basemap's longitude wrap-copy range and its sub-pixel Mercator row
+tessellation. Tests that need an unavailable capability skip gracefully
 — the offscreen-GL render tests when no OpenGL 4.1 context is present, and the
 NetCDF subdataset tests when the GDAL netCDF driver is absent.
 
