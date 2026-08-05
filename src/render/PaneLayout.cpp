@@ -116,6 +116,25 @@ int PaneLayout::syncRoleAt(int index) const {
     }
 }
 
+FvPaneSyncInfo PaneLayout::syncInfoAt(int index) const {
+    FvPaneSyncInfo info;
+    info.role = syncRoleAt(index);
+    if (info.role == 0) return info;
+    // Master and slaves all carry the MASTER's colour + label: the badge colour is what pairs
+    // a slave's mirror with the ★ of the pane driving it (there is one group at a time today,
+    // so the master is m_sync_master).
+    const int mi = indexOfId(m_sync_master);
+    if (mi >= 0) {
+        info.masterColor = m_panes[static_cast<size_t>(mi)]->color();
+        info.masterLabel = m_panes[static_cast<size_t>(mi)]->label();
+    }
+    return info;
+}
+
+FvPaneSyncInfo PaneLayout::syncInfoForId(uint64_t id) const {
+    return syncInfoAt(indexOfId(id));
+}
+
 void PaneLayout::clearSync() {
     for (auto& p : m_panes) {
         if (p->syncRole() != Pane::SyncRole::None) {
@@ -124,6 +143,7 @@ void PaneLayout::clearSync() {
         }
     }
     m_sync_master = 0;
+    restack();   // pills drop their sync badges
     emit syncRolesChanged();
 }
 
@@ -163,6 +183,7 @@ void PaneLayout::syncToggle(uint64_t masterId, uint64_t otherId) {
     if (auto* mc = master->canvas())
         m_default_sync->syncCamera(mc->camera(), mc->projectCrsWkt());
 
+    restack();   // pills pick up the new master/slave badges
     emit syncRolesChanged();
 }
 
@@ -188,6 +209,9 @@ void PaneLayout::setPaneLabel(int index, const QString& label) {
     if (index < 0 || index >= static_cast<int>(m_panes.size())) return;
     m_panes[static_cast<size_t>(index)]->setLabel(label);
     restack();   // pill text follows the new label
+    // Renaming the master rewrites every slave badge's "Synced to …" tooltip.
+    if (m_sync_master && m_panes[static_cast<size_t>(index)]->id() == m_sync_master)
+        emit syncRolesChanged();
 }
 
 int PaneLayout::indexOfCanvas(const MapCanvas* canvas) const {
@@ -205,6 +229,10 @@ void PaneLayout::setPaneColor(int index, const QColor& c) {
     if (index < 0 || index >= static_cast<int>(m_panes.size())) return;
     m_panes[static_cast<size_t>(index)]->setColor(c);
     restack();   // pill colour follows the new pane colour
+    // Recolouring the MASTER recolours every badge in its group — the slaves wear the
+    // master's colour — so let the listeners (canvas chrome, Layers panel) repaint too.
+    if (m_sync_master && m_panes[static_cast<size_t>(index)]->id() == m_sync_master)
+        emit syncRolesChanged();
 }
 
 QColor PaneLayout::paneColorForId(uint64_t id) const {
@@ -292,7 +320,8 @@ void PaneLayout::restack() {
         for (int i = 0; i < static_cast<int>(m_panes.size()); ++i) {
             if (m_pane_region[static_cast<size_t>(i)] != r) continue;
             const auto& p = m_panes[static_cast<size_t>(i)];
-            entries.push_back(PaneEntry{ p->canvas(), p->id(), p->label(), p->color() });
+            entries.push_back(PaneEntry{ p->canvas(), p->id(), p->label(), p->color(),
+                                         syncInfoAt(i) });
         }
         m_regions[r]->setPanes(entries, m_front_by_region[r]);
         m_front_by_region[r] = m_regions[r]->frontId();   // read back the resolved front

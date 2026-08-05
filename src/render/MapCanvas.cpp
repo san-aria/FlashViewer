@@ -404,9 +404,9 @@ void MapCanvas::setPaneColor(const QColor& c) {
     update();   // repaint border
 }
 
-void MapCanvas::setSyncRole(int role) {
-    m_sync_role = role;   // 0 = None; !=0 means this pane is part of a sync group (Phase 6.9)
-    if (m_chrome) m_chrome->setSyncRole(role);
+void MapCanvas::setSyncInfo(const FvPaneSyncInfo& info) {
+    m_sync_role = info.role;   // 0 = None; !=0 means this pane is in a sync group (Phase 6.9)
+    if (m_chrome) m_chrome->setSyncInfo(info);
 }
 
 void MapCanvas::setSyncInfoResolver(std::function<std::vector<PaneSyncEntry>()> r) {

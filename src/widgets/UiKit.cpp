@@ -1,12 +1,16 @@
 #include "widgets/UiKit.hpp"
 
+#include <QApplication>
+#include <QCoreApplication>
 #include <QFrame>
+#include <QImage>
 #include <QLabel>
 #include <QPainter>
 #include <QPalette>
 #include <QRect>
 #include <QStyle>
 #include <QStyleOptionButton>
+#include <QSvgRenderer>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -106,4 +110,46 @@ QFrame* fvMakeSection(const QString& title, QVBoxLayout*& innerLay, QWidget* par
     auto* hdr = new QLabel("<b>" + title + "</b>", frame);
     innerLay->addWidget(hdr);
     return frame;
+}
+
+// --------------------------------------------------------------------------
+// Sync badge
+// --------------------------------------------------------------------------
+
+QPixmap fvSyncRoleIcon(const FvPaneSyncInfo& info, int px, qreal dpr) {
+    if (info.role != 1 && info.role != 2) return {};
+    if (px <= 0) return {};
+    if (dpr <= 0) dpr = 1.0;
+
+    const bool isDark = QApplication::palette().window().color().lightness() < 128;
+    const QString name = (info.role == 1) ? QStringLiteral("star") : QStringLiteral("mirror");
+    QSvgRenderer r(QStringLiteral(":/icons/%1%2.svg")
+                       .arg(name, isDark ? QStringLiteral("_dark") : QStringLiteral("_light")));
+
+    QImage img(int(px * dpr), int(px * dpr), QImage::Format_ARGB32_Premultiplied);
+    img.setDevicePixelRatio(dpr);
+    img.fill(Qt::transparent);
+    QPainter p(&img);
+    p.setRenderHint(QPainter::Antialiasing);
+    r.render(&p, QRectF(0, 0, px, px));
+    // Recolour the glyph to the group's master colour, keeping the SVG's alpha (SourceIn
+    // multiplies the fill by what is already there). The badge's COLOUR is the information —
+    // it is what ties a slave's mirror to the ★ of the pane driving it.
+    if (info.masterColor.isValid()) {
+        p.setCompositionMode(QPainter::CompositionMode_SourceIn);
+        p.fillRect(QRectF(0, 0, px, px), info.masterColor);
+    }
+    p.end();
+    return QPixmap::fromImage(img);
+}
+
+QString fvSyncRoleTooltip(const FvPaneSyncInfo& info) {
+    if (info.role == 1)
+        return QCoreApplication::translate(
+            "PaneSync", "Sync master — the synced panes follow this view");
+    if (info.role == 2)
+        return info.masterLabel.isEmpty()
+            ? QCoreApplication::translate("PaneSync", "Synced (slave)")
+            : QCoreApplication::translate("PaneSync", "Synced to \"%1\"").arg(info.masterLabel);
+    return {};
 }

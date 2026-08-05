@@ -8,9 +8,12 @@
 //    solid accent-filled square (which read as a flat blue block).
 //  • fvMakeSection — the bordered section frame whose bold heading sits INSIDE the frame,
 //    so the heading can never collide with the frame border or the widget below it.
+//  • FvPaneSyncInfo / fvSyncRoleIcon — the master/slave sync badge, shown by the pane
+//    chrome, the region pills AND the Layers-panel pane headers, so all three read alike.
 
 #include <QCheckBox>
 #include <QColor>
+#include <QPixmap>
 #include <QString>
 
 class QFrame;
@@ -67,3 +70,23 @@ private:
 /// `innerLay` is set to the frame's layout, already carrying the heading; append the
 /// section's content to it.
 QFrame* fvMakeSection(const QString& title, QVBoxLayout*& innerLay, QWidget* parent);
+
+/// How a pane takes part in the current sync group, plus the identity of the group.
+///
+/// `masterColor` is the MASTER's pane colour on every member of the group — the master's
+/// own badge and each slave's alike — so the badge colour answers "synced to whom?" at a
+/// glance, which the shape alone (★ vs mirror) cannot. `role` 0 means not synced, in which
+/// case the other fields are unset.
+struct FvPaneSyncInfo {
+    int     role{0};        ///< 0 = not synced, 1 = master, 2 = slave
+    QColor  masterColor;    ///< group master's pane colour (invalid ⇒ theme-tinted glyph)
+    QString masterLabel;    ///< group master's pane label, for the tooltip
+};
+
+/// The sync badge for `info`, `px` px square at device pixel ratio `dpr`: the ★ for a
+/// master, the mirror glyph for a slave, recoloured to `info.masterColor`. Returns a null
+/// pixmap when `info.role` is 0.
+QPixmap fvSyncRoleIcon(const FvPaneSyncInfo& info, int px, qreal dpr = 1.0);
+
+/// Tooltip for that badge — naming the master pane for a slave. Empty when not synced.
+QString fvSyncRoleTooltip(const FvPaneSyncInfo& info);

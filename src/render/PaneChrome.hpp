@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <vector>
+#include "widgets/UiKit.hpp"   // FvPaneSyncInfo, fvSyncRoleIcon
 
 class QLabel;
 class SvgIconButton;
@@ -31,8 +32,9 @@ public:
     void setActiveAppearance(bool active);
     void setPaneColor(const QColor& c);   // ID label colour (Phase 6.2.1)
     void setPaneDragId(uint64_t id) { m_pane_id = id; }   // id carried when the label is dragged (Phase 6.4)
-    // Sync role icon beside the ID label (Phase 6.5): 0 = none, 1 = master (★), 2 = slave (mirror).
-    void setSyncRole(int role);
+    // Sync badge beside the ID label (Phase 6.5): ★ for a master, mirror for a slave — both
+    // painted in the MASTER pane's colour, so the badge says which pane drives this one.
+    void setSyncInfo(const FvPaneSyncInfo& info);
     // Current scale-bar visibility, for the gear menu's checkable "Show Scale Bar" item (Phase 7).
     void setScaleBarVisible(bool on) { m_scalebar_visible = on; }
     // Current colorbar visibility, for the gear menu's checkable "Show Colorbar" item (Phase 16 #5).
@@ -60,15 +62,14 @@ private:
     void applyTheme();        // pick themed icons + label styling
     void showMenu();
     void startPaneDrag();
-    QPixmap renderSvgIcon(const QString& name, int sz) const;   // themed SVG → pixmap
 
-    QLabel*        m_role_icon{nullptr};   // ★ master / mirror slave, beside the ID label
+    QLabel*        m_role_icon{nullptr};   // ★ master / mirror slave, beside the ID label (master-coloured)
     QLabel*        m_label{nullptr};
     SvgIconButton* m_gear{nullptr};
     bool           m_active{false};
     QColor         m_color;   // pane colour for the ID label text
     uint64_t       m_pane_id{0};
-    int            m_sync_role{0};   // 0 none, 1 master, 2 slave
+    FvPaneSyncInfo m_sync;   // role + the group master's colour/label
     bool           m_scalebar_visible{true};   // reflects the pane's scale-bar visibility
     bool           m_colorbar_visible{true};   // reflects the pane's colorbar visibility (Phase 16 #5)
     QPoint         m_drag_start;

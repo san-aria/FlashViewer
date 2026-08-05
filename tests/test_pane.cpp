@@ -10,8 +10,11 @@
 #include "render/PaneSlot.hpp"         // New-Pane snap-picker slot mapping (TC-PNE-13)
 #include "render/SyncGroup.hpp"        // camera broadcast (TC-PNE-02/03)
 #include "render/Camera.hpp"
+#include "widgets/UiKit.hpp"           // sync badge helpers (TC-PNE-14)
 
 #include <QObject>
+#include <QPixmap>
+#include <QSizeF>
 #include <iterator>   // std::size
 #include <memory>
 #include <set>
@@ -339,4 +342,39 @@ TEST_CASE("SyncGroup broadcasts a shared camera to linked observers", "[pane][TC
     REQUIRE(received == master);        // linked observer adopts the shared camera
     REQUIRE(group.camera() == master); // the group stores it
     REQUIRE_FALSE(independent == master);  // an unlinked pane retains its own camera
+}
+
+TEST_CASE("Sync badge is master-coloured and names its master", "[pane][TC-PNE-14]") {
+    // The ★/mirror badge shown by the pane chrome, the region pills and the Layers-panel pane
+    // headers is built from ONE helper, so all three can never disagree. Role 0 must yield
+    // nothing to draw; both synced roles must yield a badge at the requested logical size,
+    // and a slave's tooltip must name the master it follows.
+    FvPaneSyncInfo none;
+    REQUIRE(none.role == 0);
+    REQUIRE(fvSyncRoleIcon(none, 14).isNull());
+    REQUIRE(fvSyncRoleTooltip(none).isEmpty());
+
+    FvPaneSyncInfo master{1, QColor(0x4c, 0xc9, 0xf0), "Pane 1"};
+    FvPaneSyncInfo slave {2, QColor(0x4c, 0xc9, 0xf0), "Pane 1"};
+
+    const QPixmap mpm = fvSyncRoleIcon(master, 14);
+    const QPixmap spm = fvSyncRoleIcon(slave,  14);
+    REQUIRE_FALSE(mpm.isNull());
+    REQUIRE_FALSE(spm.isNull());
+    REQUIRE(mpm.deviceIndependentSize() == QSizeF(14, 14));
+
+    // A device pixel ratio scales the backing store, not the logical size the layout sees.
+    const QPixmap hidpi = fvSyncRoleIcon(slave, 14, 2.0);
+    REQUIRE(hidpi.width() == 28);
+    REQUIRE(hidpi.deviceIndependentSize() == QSizeF(14, 14));
+
+    // The slave's tooltip carries the MASTER's label — the shape says "slave", the colour and
+    // this text say whose.
+    REQUIRE(fvSyncRoleTooltip(slave).contains("Pane 1"));
+    REQUIRE_FALSE(fvSyncRoleTooltip(master).contains("Pane 1"));
+
+    // A slave with no known master still explains itself rather than showing a bare glyph.
+    FvPaneSyncInfo orphan{2, QColor(), QString()};
+    REQUIRE_FALSE(fvSyncRoleTooltip(orphan).isEmpty());
+    REQUIRE_FALSE(fvSyncRoleIcon(orphan, 14).isNull());   // untinted, but still drawn
 }

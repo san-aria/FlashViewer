@@ -5,6 +5,7 @@
 #include <QEvent>
 #include <QColor>
 #include "panels/SvgIconButton.hpp"
+#include "widgets/UiKit.hpp"   // FvPaneSyncInfo (pane-header sync badge)
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -67,6 +68,9 @@ public:
     // Phase 6.3 / 18: resolve the list of panes (id, label) in LAYOUT order. Drives both
     // the "To Pane" submenu and the pane grouping (every pane gets a group, even empty).
     void setPaneListResolver(std::function<std::vector<std::pair<quint64, QString>>()> fn);
+    // Resolve a pane's sync role + its group master's colour/label. Drives the badge drawn at
+    // the far right of each pane header, matching the pane chrome and the region pills.
+    void setPaneSyncResolver(std::function<FvPaneSyncInfo(quint64)> fn);
     // Rebuild the grouped list — call after panes are added/removed/renamed (Phase 18 #6).
     void refreshPanes();
 
@@ -131,4 +135,5 @@ private:
     bool              m_selecting{false};  // this panel is driving setActiveLayer right now
     std::function<QColor(uint64_t)> m_pane_color;   // layer paneId → pane colour
     std::function<std::vector<std::pair<quint64, QString>>()> m_pane_list;  // panes, layout order
+    std::function<FvPaneSyncInfo(quint64)> m_pane_sync;   // pane id → sync badge state
 };

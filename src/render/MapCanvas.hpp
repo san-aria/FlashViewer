@@ -49,9 +49,9 @@ public:
     void          setPaneLabel(const QString& label);
     void          setPaneColor(const QColor& c);   // border + ID label colour (Phase 6.2.1)
     void          setActive(bool active);
-    // Sync (Phase 6.5): role icon (0 none/1 master/2 slave), the "Sync With" submenu resolver,
-    // and a "ghost cursor" marker mirrored from a synced sibling pane.
-    void          setSyncRole(int role);
+    // Sync (Phase 6.5): the master/slave badge (drawn in the group master's colour), the
+    // "Sync With" submenu resolver, and a "ghost cursor" marker mirrored from a synced sibling.
+    void          setSyncInfo(const FvPaneSyncInfo& info);
     void          setSyncInfoResolver(std::function<std::vector<PaneSyncEntry>()> r);
     void          setGhostCursor(double geo_x, double geo_y, bool active);
     bool          isActivePane() const { return m_active; }

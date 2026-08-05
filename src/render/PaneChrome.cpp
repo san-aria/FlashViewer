@@ -68,24 +68,10 @@ void PaneChrome::setPaneColor(const QColor& c) {
     applyTheme();
 }
 
-QPixmap PaneChrome::renderSvgIcon(const QString& name, int sz) const {
-    const bool isDark = QApplication::palette().window().color().lightness() < 128;
-    const QString sfx = isDark ? "_dark" : "_light";
-    const qreal dpr = devicePixelRatioF();
-    QSvgRenderer r(QString(":/icons/%1%2.svg").arg(name, sfx));
-    QImage img(int(sz * dpr), int(sz * dpr), QImage::Format_ARGB32_Premultiplied);
-    img.setDevicePixelRatio(dpr);
-    img.fill(Qt::transparent);
-    QPainter p(&img);
-    p.setRenderHint(QPainter::Antialiasing);
-    r.render(&p, QRectF(0, 0, sz, sz));
-    p.end();
-    return QPixmap::fromImage(img);
-}
-
-void PaneChrome::setSyncRole(int role) {
-    if (m_sync_role == role) return;
-    m_sync_role = role;
+void PaneChrome::setSyncInfo(const FvPaneSyncInfo& info) {
+    if (m_sync.role == info.role && m_sync.masterColor == info.masterColor
+        && m_sync.masterLabel == info.masterLabel) return;
+    m_sync = info;
     applyTheme();   // refresh the role icon
 }
 
@@ -166,19 +152,19 @@ void PaneChrome::applyTheme() {
         " padding:1px 7px; border-radius:8px; font-weight:%4; }")
         .arg(text, bg, border, m_active ? "bold" : "normal"));
 
-    // Sync role icon (Phase 6.5): ★ master / mirror slave, beside the ID label.
+    // Sync badge (Phase 6.5): ★ master / mirror slave beside the ID label, painted in the
+    // GROUP MASTER's pane colour — on the master and its slaves alike, so a glance pairs each
+    // mirror with the ★ it follows. Falls back to the theme-tinted glyph if that colour is
+    // unset. Same badge as the region pills and the Layers-panel pane headers.
     if (m_role_icon) {
-        if (m_sync_role == 1) {
-            m_role_icon->setPixmap(renderSvgIcon("star", 14));
-            m_role_icon->setToolTip(tr("Sync master"));
-            m_role_icon->show();
-        } else if (m_sync_role == 2) {
-            m_role_icon->setPixmap(renderSvgIcon("mirror", 14));
-            m_role_icon->setToolTip(tr("Synced (slave)"));
-            m_role_icon->show();
-        } else {
+        const QPixmap badge = fvSyncRoleIcon(m_sync, 14, devicePixelRatioF());
+        if (badge.isNull()) {
             m_role_icon->clear();
             m_role_icon->hide();
+        } else {
+            m_role_icon->setPixmap(badge);
+            m_role_icon->setToolTip(fvSyncRoleTooltip(m_sync));
+            m_role_icon->show();
         }
     }
     adjustSize();
@@ -235,7 +221,7 @@ void PaneChrome::showMenu() {
         }
     }
     QAction* actUnsync = nullptr;
-    if (m_sync_role != 0 || anySynced) {
+    if (m_sync.role != 0 || anySynced) {
         syncMenu->addSeparator();
         actUnsync = syncMenu->addAction(tr("Unsync"));
     }

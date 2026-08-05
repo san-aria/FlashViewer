@@ -17,7 +17,11 @@
 
 - CMake 3.25 or later
 - Ninja build system
-- Qt 6.4 or later (Core, Widgets, OpenGL, OpenGLWidgets, Charts, Network modules)
+- Qt 6.4 or later (Core, Widgets, OpenGL, OpenGLWidgets, Charts, Network, **Svg** modules).
+  Svg renders the themed toolbar/menu icons and the pane sync badges; the **test** binary links it
+  too (`widgets/UiKit` is compiled into the suite), so it is required for `flashviewer_tests`, not
+  only for the app. On Linux/macOS it is the `qt6-svg-dev` / `qt6-qtsvg-devel` package listed
+  below; on Windows the aqt desktop package already contains it.
 - GDAL 3.8 or later
 - muParser 2.3 or later
 - spdlog 1.x

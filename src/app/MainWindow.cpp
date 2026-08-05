@@ -157,15 +157,17 @@ MainWindow::MainWindow(QWidget* parent)
             if (m_pane_layout->paneId(i) == pid) { setActivePane(i); break; }
     });
 
-    // Sync roles changed (Phase 6.5): refresh each pane's role icon (★/mirror) and clear any
-    // stale ghost-cursor markers.
+    // Sync roles changed (Phase 6.5): refresh each pane's sync badge (★/mirror, drawn in the
+    // group master's colour) and clear any stale ghost-cursor markers. The Layers panel shows
+    // the same badge on its pane headers, so it is rebuilt here too (Phase 20).
     connect(m_pane_layout, &PaneLayout::syncRolesChanged, this, [this] {
         for (int i = 0; i < m_pane_layout->paneCount(); ++i)
             if (auto* c = m_pane_layout->paneCanvas(i)) {
-                c->setSyncRole(m_pane_layout->syncRoleAt(i));
+                c->setSyncInfo(m_pane_layout->syncInfoAt(i));
                 c->setGhostCursor(0, 0, false);
                 c->update();
             }
+        if (m_layer_panel) m_layer_panel->refreshPanes();
     });
 
     // A layer dropped onto a region: create a pane there if the region is empty, then assign
@@ -918,6 +920,9 @@ void MainWindow::setupDocks() {
             v.emplace_back(m_pane_layout->paneId(i), m_pane_layout->paneLabel(i));
         return v;
     });
+    // Sync badge on each pane header: role + the group MASTER's colour/label (Phase 20).
+    m_layer_panel->setPaneSyncResolver(
+        [this](quint64 pid) { return m_pane_layout->syncInfoForId(pid); });
     connect(m_layer_panel, &LayerPanel::paneAssignmentRequested,
             this, [this](int layerIndex, quint64 paneId) {
                 assignLayerToPane(layerIndex, paneId);

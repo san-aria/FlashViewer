@@ -66,6 +66,10 @@ public:
     bool      paneSynced(uint64_t paneId) const;
     uint64_t  syncMasterId() const { return m_sync_master; }
     int       syncRoleAt(int index) const;   // 0 none / 1 master / 2 slave
+    // Role PLUS the group master's colour and label — what every sync badge is drawn from
+    // (pane chrome, region pills, Layers-panel pane headers). role 0 ⇒ pane is not synced.
+    FvPaneSyncInfo syncInfoAt(int index) const;
+    FvPaneSyncInfo syncInfoForId(uint64_t id) const;
     // Toggle `otherId` in `masterId`'s sync group: links/unlinks it, makes `masterId` the
     // master, snaps slaves to the master's view, and links pan/zoom. Clears the group if no
     // slaves remain.

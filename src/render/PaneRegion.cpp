@@ -11,6 +11,9 @@
 #include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QMimeData>
+#include <QIcon>
+#include <QPixmap>
+#include <QSize>
 #include <functional>
 
 // MIME type carrying a dragged pane's id, set by PaneChrome's ID label (Phase 6.4).
@@ -147,8 +150,18 @@ void PaneRegion::rebuildPills() {
     for (const auto& e : m_panes) {
         auto* pill = new PanePill(e.label, m_pill_bar);
         pill->setCursor(Qt::PointingHandCursor);
-        pill->setToolTip(tr("Show pane \"%1\" — or drop a layer here to move it "
-                            "into that pane").arg(e.label));
+        QString tip = tr("Show pane \"%1\" — or drop a layer here to move it "
+                         "into that pane").arg(e.label);
+        // Sync badge on the pill: ★ for the master, mirror for a slave, both in the group
+        // MASTER's colour — the same glyph the pane chrome and the Layers panel show, so a
+        // pane stacked behind another still declares which view it follows (FR-PNE sync).
+        const QPixmap badge = fvSyncRoleIcon(e.sync, 11, devicePixelRatioF());
+        if (!badge.isNull()) {
+            pill->setIcon(QIcon(badge));
+            pill->setIconSize(QSize(11, 11));
+            tip += "\n" + fvSyncRoleTooltip(e.sync);
+        }
+        pill->setToolTip(tip);
         pill->setCheckable(true);
         pill->setChecked(e.id == m_front_id);
         const QColor c = e.color.isValid()

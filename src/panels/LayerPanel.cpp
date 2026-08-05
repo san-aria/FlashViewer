@@ -60,6 +60,14 @@ static constexpr int kGroupRole = Qt::UserRole + 4;
 // fight ClearAndSelect (a plain click on one child would immediately be undone). The rows
 // are highlighted through this role instead, and selectedLayerIndices() folds them in.
 static constexpr int kPaneSelRole = Qt::UserRole + 5;
+// Sync badge on a pane-GROUP header: the pane's role (0 none / 1 master / 2 slave) and the
+// colour of the group's MASTER, which both roles are drawn in (Phase 20).
+static constexpr int kSyncRoleRole  = Qt::UserRole + 6;
+static constexpr int kSyncColorRole = Qt::UserRole + 7;
+
+// Edge length of the pane-header sync badge, and its inset from the row's trailing edge.
+static constexpr int kSyncBadgePx     = 14;
+static constexpr int kSyncBadgeMargin = 6;
 
 // Delegate that paints every row of the tree through ONE path (Phase 18):
 //  • the row background is a translucent PANE-COLOURED band — stronger for a pane-GROUP
@@ -119,6 +127,23 @@ public:
         // band behind the row already attributes it to its pane, so tinting the name too was
         // redundant and cost contrast. Only weight distinguishes a header / the active layer.
         QStyledItemDelegate::paint(p, o, index);
+
+        // Sync badge, far right of a pane header (Phase 20): ★ when this pane is the sync
+        // master, the mirror glyph when it is a slave — both in the MASTER's pane colour, so
+        // the panel says at a glance which panes follow which. A pane header spans all three
+        // columns, so opt.rect here is the whole row and the badge sits on its trailing edge.
+        if (!group || index.column() != kColName) return;
+        FvPaneSyncInfo sync;
+        sync.role        = name.data(kSyncRoleRole).toInt();
+        sync.masterColor = name.data(kSyncColorRole).value<QColor>();
+        const qreal dpr = opt.widget ? opt.widget->devicePixelRatioF() : qreal(1);
+        const QPixmap badge = fvSyncRoleIcon(sync, kSyncBadgePx, dpr);
+        if (badge.isNull()) return;
+        const int y = opt.rect.y() + (opt.rect.height() - kSyncBadgePx) / 2;
+        const int x = (opt.direction == Qt::RightToLeft)
+            ? opt.rect.left() + kSyncBadgeMargin
+            : opt.rect.right() - kSyncBadgePx - kSyncBadgeMargin + 1;
+        p->drawPixmap(QRect(x, y, kSyncBadgePx, kSyncBadgePx), badge);
     }
 };
 
@@ -412,6 +437,11 @@ void LayerPanel::setPaneListResolver(std::function<std::vector<std::pair<quint64
     if (m_mgr) rebuildList();
 }
 
+void LayerPanel::setPaneSyncResolver(std::function<FvPaneSyncInfo(quint64)> fn) {
+    m_pane_sync = std::move(fn);
+    if (m_mgr) rebuildList();
+}
+
 void LayerPanel::refreshPanes() {
     if (m_mgr) rebuildList();
 }
@@ -480,12 +510,20 @@ void LayerPanel::rebuildList() {
         header->setData(kColName, kGroupRole,      true);
         header->setData(kColName, kPaneIdRole,     static_cast<qulonglong>(grp.paneId));
         header->setData(kColName, kPaneColorRole,  paneCol);
+        // Sync state drives the badge PaneColorDelegate paints on the header's trailing edge.
+        const FvPaneSyncInfo sync = m_pane_sync ? m_pane_sync(grp.paneId) : FvPaneSyncInfo{};
+        header->setData(kColName, kSyncRoleRole,  sync.role);
+        header->setData(kColName, kSyncColorRole, sync.masterColor);
         m_tree->addTopLevelItem(header);
         header->setFirstColumnSpanned(true);   // header band spans all three columns
         header->setExpanded(!collapsed.contains(grp.paneId));
         header->setSelected(selectedPanes.contains(grp.paneId));
+        QStringList headerTips;
         if (grp.layerIndices.empty())
-            header->setToolTip(kColName, tr("This pane has no layers — drop one here."));
+            headerTips << tr("This pane has no layers — drop one here.");
+        if (sync.role) headerTips << fvSyncRoleTooltip(sync);
+        if (!headerTips.isEmpty())
+            header->setToolTip(kColName, headerTips.join('\n'));
 
         for (int i : grp.layerIndices) {
             auto layer = m_mgr->layerAt(i);

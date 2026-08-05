@@ -4,6 +4,7 @@
 #include <QColor>
 #include <QVector>
 #include <cstdint>
+#include "widgets/UiKit.hpp"   // FvPaneSyncInfo (pill sync badge)
 
 class MapCanvas;
 class QStackedWidget;
@@ -14,10 +15,11 @@ class QHBoxLayout;
 // MapCanvas lifetime stays with the Pane/PaneLayout; the region only parents it
 // into its stacked widget for display.
 struct PaneEntry {
-    MapCanvas* canvas{nullptr};
-    uint64_t   id{0};
-    QString    label;
-    QColor     color;
+    MapCanvas*     canvas{nullptr};
+    uint64_t       id{0};
+    QString        label;
+    QColor         color;
+    FvPaneSyncInfo sync;   // master/slave badge shown on the pill (role 0 = none)
 };
 
 // A layout region (Phase 6.4): a fixed slot in Full/Half/Quarter that holds a STACK

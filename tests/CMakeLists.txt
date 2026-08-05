@@ -77,6 +77,7 @@ add_executable(flashviewer_tests
     "${CMAKE_SOURCE_DIR}/src/core/RasterLayer.cpp"
     "${CMAKE_SOURCE_DIR}/src/core/LayerManager.cpp"
     "${CMAKE_SOURCE_DIR}/src/panels/HistogramPanel.cpp"
+    "${CMAKE_SOURCE_DIR}/src/widgets/UiKit.cpp"
     "${CMAKE_SOURCE_DIR}/src/render/SyncGroup.cpp"
     "${CMAKE_SOURCE_DIR}/src/math/ExpressionEngine.cpp"
     "${CMAKE_SOURCE_DIR}/src/io/RasterDataset.cpp"
@@ -125,6 +126,7 @@ target_link_libraries(flashviewer_tests PRIVATE
     Qt6::Network
     Qt6::OpenGL
     Qt6::OpenGLWidgets
+    Qt6::Svg                             # UiKit's sync-badge glyph renderer
     spdlog::spdlog
     glm::glm
     nlohmann_json::nlohmann_json
