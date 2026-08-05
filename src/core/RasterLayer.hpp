@@ -92,6 +92,23 @@ public:
     bool  ownsTempFile() const { return m_owns_temp_file; }
     void  setOwnsTempFile(bool v) { m_owns_temp_file = v; }
 
+    // Extra managed temp files this layer is responsible for, beyond its own source file.
+    // A geolocation-array warp (FR-IO-14) produces a lazy warped VRT that REFERENCES masked
+    // X/Y sidecar rasters and an intermediate VRT: deleting only the source would leave
+    // those orphaned, so the reaper deletes these too. Paths are plain filesystem paths.
+    const std::vector<std::string>& tempSidecars() const { return m_temp_sidecars; }
+    void addTempSidecar(const std::string& path) { m_temp_sidecars.push_back(path); }
+
+    // Geolocation-array georeferencing this layer was opened with (FR-IO-14), so switching
+    // to another variable of the same file can re-apply it instead of silently reverting to
+    // the unreferenced grid. Empty paths mean the layer is not geoloc-warped.
+    struct GeolocSource {
+        std::string x_path, y_path, crs_wkt;
+        bool valid() const { return !x_path.empty() && !y_path.empty(); }
+    };
+    const GeolocSource& geolocSource() const { return m_geoloc; }
+    void setGeolocSource(const GeolocSource& g) { m_geoloc = g; }
+
     Extent extent() const { return m_ds ? m_ds->extent() : Extent{}; }
 
     TileBuffer previewBuffer(int maxSize = 1024) const {
@@ -119,6 +136,9 @@ private:
     int     m_legend_precision{-1};      // −1 = auto
     int     m_legend_orientation{0};     // 0 = vertical, 1 = horizontal
     bool    m_legend_visible{true};      // colorbar show/hide (per-layer, Phase 7 follow-up)
+
+    std::vector<std::string> m_temp_sidecars;   // extra managed temps (geoloc warp)
+    GeolocSource m_geoloc;                      // set when opened via geolocation arrays
 
     std::string m_parent_path;
     std::vector<std::pair<std::string,std::string>> m_subdatasets;

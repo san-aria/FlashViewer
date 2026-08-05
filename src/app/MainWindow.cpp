@@ -2,7 +2,7 @@
 #include "app/Application.hpp"
 #include "app/GpuInfoDialog.hpp"
 #include "app/AboutLicensesDialog.hpp"
-#include "app/NetCdfAssignDialog.hpp"
+#include "app/CoordAssignDialog.hpp"
 #include "app/NewPaneDialog.hpp"
 #include "app/Settings.hpp"
 #include "plots/SpectralPlotWindow.hpp"
@@ -324,19 +324,21 @@ void MainWindow::openFiles(const QStringList& paths) {
                     auto sub_ds = DatasetFactory::openSubdataset(
                         subs[static_cast<size_t>(idx)].first);
                     if (!sub_ds) continue;
+                    // Missing grid OR missing CRS: offer coordinate assignment (FR-IO-9).
+                    // This runs BEFORE the layer is built because a 2-D geolocation
+                    // assignment swaps in a warped dataset, and RasterLayer's constructor
+                    // auto-stretches off whatever dataset it is given.
+                    std::optional<CoordAssignment> coords;
+                    bool geoloc_applied = false;
+                    if (sub_ds->isGeoTransformIdentity() || sub_ds->crsWkt().empty()) {
+                        coords = showCoordAssignDialog(path, stdPath, sub_ds, subs);
+                        if (coords) geoloc_applied = applyCoordAssignment(sub_ds, *coords);
+                    }
                     auto layer = std::make_shared<RasterLayer>(sub_ds);
                     layer->initSubdatasetMeta(stdPath, subs, idx);
                     layer->setName(DatasetFactory::extractVarName(
                         subs[static_cast<size_t>(idx)].first));
-                    // If geotransform is identity: offer coordinate assignment dialog
-                    if (sub_ds->isGeoTransformIdentity()) {
-                        auto coords = showNetCdfAssignDialog(path, stdPath, sub_ds, subs);
-                        if (coords) {
-                            sub_ds->setGeoTransformOverride(coords->gt);
-                            if (!coords->crs_wkt.empty())
-                                sub_ds->setCrsOverride(coords->crs_wkt);
-                        }
-                    }
+                    if (geoloc_applied) registerCoordAssignment(*layer, *coords);
                     layer->setPaneId(activePaneId());   // display on the active pane
                     PerfMetrics::instance().markOpenStart(layer->layerId());  // NFR-PERF-3/4
                     m_layer_mgr->addLayer(layer);
@@ -378,7 +380,22 @@ void MainWindow::openFiles(const QStringList& paths) {
             continue;
         }
 
+        // Single-variable formats get the same escape hatch as the NetCDF/HDF5 path
+        // (FR-IO-9): anything that opens WITHOUT a grid or WITHOUT a CRS — a headless
+        // binary raster just imported through BinaryImportDialog, a GeoTIFF written with
+        // no projection — is offered coordinate/CRS assignment before it becomes a layer.
+        // There are no subdatasets to choose from here, so the arrays come from another
+        // file via the dialog's Browse buttons.
+        std::optional<CoordAssignment> coords;
+        bool geoloc_applied = false;
+        if (ds->isGeoTransformIdentity() || ds->crsWkt().empty()) {
+            static const std::vector<std::pair<std::string,std::string>> kNoSubs;
+            coords = showCoordAssignDialog(path, stdPath, ds, kNoSubs);
+            if (coords) geoloc_applied = applyCoordAssignment(ds, *coords);
+        }
+
         auto layer = std::make_shared<RasterLayer>(ds);
+        if (geoloc_applied) registerCoordAssignment(*layer, *coords);
         layer->setPaneId(activePaneId());   // display on the active pane
         PerfMetrics::instance().markOpenStart(layer->layerId());   // NFR-PERF-3/4 probe
         m_layer_mgr->addLayer(layer);
@@ -502,15 +519,21 @@ bool MainWindow::loadCombinedSubdatasets(
     // Same identity-geotransform escape hatch as the per-variable path: a non-CF file
     // stacks into a VRT that is equally unreferenced, so offer coordinate assignment
     // once for the whole stack (all bands share one grid by construction).
-    if (ds->isGeoTransformIdentity()) {
-        if (auto coords = showNetCdfAssignDialog(path, stdPath, ds, subs)) {
-            ds->setGeoTransformOverride(coords->gt);
-            if (!coords->crs_wkt.empty()) ds->setCrsOverride(coords->crs_wkt);
-        }
+    std::optional<CoordAssignment> coords;
+    bool geoloc_applied = false;
+    if (ds->isGeoTransformIdentity() || ds->crsWkt().empty()) {
+        coords = showCoordAssignDialog(path, stdPath, ds, subs);
+        if (coords) geoloc_applied = applyCoordAssignment(ds, *coords);
     }
 
     auto layer = std::make_shared<RasterLayer>(ds);
     layer->setOwnsTempFile(true);
+    if (geoloc_applied) {
+        registerCoordAssignment(*layer, *coords);
+        // The layer's source file is now the warped VRT, so the stack VRT it was warped
+        // FROM is no longer reachable through ownsTempFile — carry it as a sidecar.
+        layer->addTempSidecar(vrt_path.toStdString());
+    }
     // Name it after the source file + variable count, not the temp VRT (the full temp
     // path is still visible in the Layer Info panel's File row).
     layer->setName(tr("%1 (%2 variables)")
@@ -524,21 +547,46 @@ bool MainWindow::loadCombinedSubdatasets(
     return true;
 }
 
-std::optional<MainWindow::AssignedCoords> MainWindow::showNetCdfAssignDialog(
+std::optional<CoordAssignment> MainWindow::showCoordAssignDialog(
     const QString& displayPath,
     const std::string& parentPath,
     const std::shared_ptr<RasterDataset>& ds,
     const std::vector<std::pair<std::string,std::string>>& subs)
 {
     QString varName = QFileInfo(displayPath).fileName();
-    NetCdfAssignDialog dlg(varName, parentPath, subs, ds, this);
+    CoordAssignDialog dlg(varName, parentPath, subs, ds, this);
     if (dlg.exec() != QDialog::Accepted) return std::nullopt;
-    auto a = dlg.assignment();
-    if (!a) return std::nullopt;
-    AssignedCoords coords;
-    std::copy(a->gt, a->gt + 6, coords.gt);
-    coords.crs_wkt = a->crs_wkt;
-    return coords;
+    return dlg.assignment();
+}
+
+bool MainWindow::applyCoordAssignment(std::shared_ptr<RasterDataset>& ds,
+                                      const CoordAssignment& a)
+{
+    if (a.use_geoloc) {
+        if (auto warped = DatasetFactory::open(a.warped_path)) {
+            ds = warped;
+            FV_INFO("Georeferenced via 2-D geolocation arrays → '{}'", a.warped_path);
+            return true;
+        }
+        // The warp reported success but its VRT will not open: drop the orphaned temps and
+        // fall through to the affine override, which at least places the layer sensibly.
+        for (const auto& f : a.temp_files) fvRemoveTempFile(QString::fromStdString(f));
+        ErrorReporter::instance().report(3, tr("Open"),
+            tr("Could not open the projected result of the geolocation arrays; "
+               "the layer was placed using an approximate geotransform instead."));
+    }
+    // set_gt false ⇒ the raster's own grid is valid and only the CRS was assigned.
+    if (a.set_gt) ds->setGeoTransformOverride(a.gt);
+    if (!a.crs_wkt.empty()) ds->setCrsOverride(a.crs_wkt);
+    return false;
+}
+
+void MainWindow::registerCoordAssignment(RasterLayer& layer,
+                                         const CoordAssignment& a)
+{
+    layer.setOwnsTempFile(true);
+    for (const auto& f : a.temp_files) layer.addTempSidecar(f);
+    layer.setGeolocSource({a.x_path, a.y_path, a.crs_wkt});
 }
 
 
@@ -1074,6 +1122,11 @@ void MainWindow::setupDocks() {
         if (rl_removed->ownsTempFile() && rl_removed->dataset())
             m_pending_temp_deletions
                 << QString::fromStdString(rl_removed->dataset()->filePath());
+        // Geolocation-warp sidecars (FR-IO-14): the warped VRT alone is not the whole
+        // temp — it references masked X/Y rasters and an intermediate VRT that would
+        // otherwise be orphaned in the temp directory.
+        for (const auto& f : rl_removed->tempSidecars())
+            m_pending_temp_deletions << QString::fromStdString(f);
         const uint64_t id = rl_removed->layerId();
         for (int i = 0; i < m_pane_layout->paneCount(); ++i)
             if (auto* c = m_pane_layout->paneCanvas(i)) c->invalidateLayer(id);
@@ -1338,6 +1391,8 @@ void MainWindow::disposeTempFiles() {
             auto* rl = static_cast<RasterLayer*>(l.get());
             if (rl->ownsTempFile() && rl->dataset())
                 paths << QString::fromStdString(rl->dataset()->filePath());
+            for (const auto& f : rl->tempSidecars())
+                paths << QString::fromStdString(f);
         }
     }
     // Release the datasets (GDALClose) so the files are deletable (esp. on Windows), then reap.

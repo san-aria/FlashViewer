@@ -62,6 +62,10 @@ add_executable(flashviewer_tests
     # Phase 19 — NetCDF/HDF combined multi-band layer (-separate band-stack VRT)
     test_band_stack.cpp
 
+    # Phase 24 — coordinate-array georeferencing: fill-value masking, 1-D axis fit,
+    # 2-D geolocation-array warp (FR-IO-14/FR-IO-15)
+    test_geoloc.cpp
+
     # Shared test harnesses / fixtures
     fixtures/FixtureFactory.cpp
     harness/GdalOracle.cpp
@@ -86,6 +90,7 @@ add_executable(flashviewer_tests
     "${CMAKE_SOURCE_DIR}/src/io/UrlGuard.cpp"
     "${CMAKE_SOURCE_DIR}/src/io/BinaryRasterParser.cpp"
     "${CMAKE_SOURCE_DIR}/src/io/BandStackVrt.cpp"
+    "${CMAKE_SOURCE_DIR}/src/io/GeolocArrays.cpp"
     "${CMAKE_SOURCE_DIR}/src/render/GlslProgram.cpp"
     "${CMAKE_SOURCE_DIR}/src/render/Camera.cpp"
     "${CMAKE_SOURCE_DIR}/src/render/TileRenderer.cpp"
@@ -102,6 +107,12 @@ add_executable(flashviewer_tests
 if(FV_PERF_INSTRUMENT)
     target_compile_definitions(flashviewer_tests PRIVATE FV_PERF_INSTRUMENT)
 endif()
+
+# Phase 24 — lets the HIDDEN real-data case (TC-IO-26, tag `[.geoloc-realdata]`) find
+# `sample_data/` regardless of where the test binary is run from. Hidden means neither CI
+# nor a plain `ctest` depends on the sample file; it is opt-in via the tag.
+target_compile_definitions(flashviewer_tests PRIVATE
+    FV_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # FR-APP-8 — embed the license manifest into the test binary so
 # AboutLicensesDialog::licenseManifest() can load it from the qrc (TC-APP-08).

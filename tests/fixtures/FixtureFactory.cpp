@@ -5,6 +5,7 @@
 #include <ogr_spatialref.h>
 #include <cpl_conv.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <stdexcept>
 #include <vector>
@@ -289,4 +290,106 @@ FixtureFactory::Fixture FixtureFactory::netcdfMultiVar(int w, int h) {
     if (!out) return {};
     GDALClose(out);
     return {p, w, h, 2, 4326, false, 0.0};
+}
+
+// The two pad values a real swath carries: an out-of-range integer sentinel that no
+// masking rule can mistake for a coordinate, and the CF default _FillValue.
+static constexpr float  kPadSentinel = 2143289344.0f;
+static constexpr double kCfFillValue = 9.969209968386869e+36;
+
+FixtureFactory::SwathFixture FixtureFactory::swathGeoloc(int w, int h, int bands,
+                                                         int fill_rows) {
+    ++m_counter;
+    if (w < 2 || h < 2 || bands < 1) throw std::runtime_error("swathGeoloc: bad size");
+    if (fill_rows < 0 || fill_rows >= h) fill_rows = 0;
+
+    // Grid geometry mirroring the sample GOES swath: ~0.04°/column in longitude,
+    // ~0.05°/row in latitude, each SHEARED by the other axis so the arrays are genuinely
+    // two-dimensional. Reading lat as an axis would pick up the shear (−0.0027°/column)
+    // instead of the real 0.05°/row and collapse the raster's height.
+    const double lon0 = -120.0, dlon_col = 0.040, dlon_row = -0.0010;
+    const double lat0 =   31.0, dlat_row =  0.050, dlat_col = -0.0027;
+
+    const size_t n = static_cast<size_t>(w) * static_cast<size_t>(h);
+    std::vector<float> lon(n), lat(n), data(n);
+    std::vector<std::vector<float>> planes(static_cast<size_t>(bands),
+                                           std::vector<float>(n));
+
+    SwathFixture f;
+    f.lon_min = f.lat_min =  std::numeric_limits<double>::max();
+    f.lon_max = f.lat_max = std::numeric_limits<double>::lowest();
+
+    const int valid_rows = h - fill_rows;
+    for (int r = 0; r < h; ++r) {
+        for (int c = 0; c < w; ++c) {
+            const size_t i = static_cast<size_t>(r) * static_cast<size_t>(w)
+                           + static_cast<size_t>(c);
+            for (int b = 0; b < bands; ++b)
+                planes[static_cast<size_t>(b)][i] =
+                    static_cast<float>(b * 1000 + c + r * w);
+
+            if (r >= valid_rows) {                 // out-of-range pad rows
+                lon[i] = lat[i] = kPadSentinel;
+                continue;
+            }
+            if (r == 0 && c == 0) {                // declared no-data, one pixel
+                lon[i] = lat[i] = static_cast<float>(kCfFillValue);
+                continue;
+            }
+            const double lo = lon0 + c * dlon_col + r * dlon_row;
+            const double la = lat0 + r * dlat_row + c * dlat_col;
+            lon[i] = static_cast<float>(lo);
+            lat[i] = static_cast<float>(la);
+            f.lon_min = std::min(f.lon_min, static_cast<double>(lon[i]));
+            f.lon_max = std::max(f.lon_max, static_cast<double>(lon[i]));
+            f.lat_min = std::min(f.lat_min, static_cast<double>(lat[i]));
+            f.lat_max = std::max(f.lat_max, static_cast<double>(lat[i]));
+        }
+    }
+
+    const double ident[6] = {0.0, 1.0, 0.0, 0.0, 0.0, 1.0};   // no spatial reference
+    std::vector<const void*> ptrs;
+    for (auto& p : planes) ptrs.push_back(p.data());
+    f.data_path = uniquePath("swath_data");
+    writeRaster(f.data_path, w, h, bands, GDT_Float32, ptrs.data(), ident, 0, false, 0.0);
+
+    const void* one = nullptr;
+    one = lon.data();
+    f.lon_path = uniquePath("swath_lon");
+    writeRaster(f.lon_path, w, h, 1, GDT_Float32, &one, ident, 0, true, kCfFillValue);
+    one = lat.data();
+    f.lat_path = uniquePath("swath_lat");
+    writeRaster(f.lat_path, w, h, 1, GDT_Float32, &one, ident, 0, true, kCfFillValue);
+
+    f.width  = w;
+    f.height = h;
+    f.bands  = bands;
+    f.out_of_convention = static_cast<size_t>(fill_rows) * static_cast<size_t>(w);
+    f.masked_per_array  = f.out_of_convention + 1;   // + the single CF-fill pixel
+    return f;
+}
+
+FixtureFactory::Fixture FixtureFactory::coordAxis1D(int n, bool vertical,
+                                                    double origin, double step,
+                                                    int lead_fill) {
+    ++m_counter;
+    if (n < 2) throw std::runtime_error("coordAxis1D: need at least 2 samples");
+    if (lead_fill < 0 || lead_fill >= n) lead_fill = 0;
+
+    std::vector<float> v(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i)
+        v[static_cast<size_t>(i)] = (i < lead_fill)
+            ? kPadSentinel
+            : static_cast<float>(origin + i * step);
+
+    const double ident[6] = {0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    const void* plane = v.data();
+    Fixture f;
+    f.path   = uniquePath("axis");
+    f.width  = vertical ? 1 : n;
+    f.height = vertical ? n : 1;
+    f.bands  = 1;
+    writeRaster(f.path, f.width, f.height, 1, GDT_Float32, &plane, ident, 0,
+                true, kCfFillValue);
+    return f;
 }

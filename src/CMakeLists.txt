@@ -8,7 +8,7 @@ qt_add_executable(FlashViewer
     app/Settings.hpp     app/Settings.cpp
     app/GpuInfoDialog.hpp app/GpuInfoDialog.cpp
     app/AboutLicensesDialog.hpp app/AboutLicensesDialog.cpp
-    app/NetCdfAssignDialog.hpp app/NetCdfAssignDialog.cpp
+    app/CoordAssignDialog.hpp app/CoordAssignDialog.cpp
     app/NewPaneDialog.hpp app/NewPaneDialog.cpp
 
     # Core data model
@@ -29,6 +29,7 @@ qt_add_executable(FlashViewer
     io/DatasetFactory.hpp   io/DatasetFactory.cpp
     io/BinaryRasterParser.hpp io/BinaryRasterParser.cpp
     io/BandStackVrt.hpp     io/BandStackVrt.cpp
+    io/GeolocArrays.hpp     io/GeolocArrays.cpp
     io/BinaryImportDialog.hpp io/BinaryImportDialog.cpp
     io/CloudReader.hpp      io/CloudReader.cpp
     io/UrlGuard.hpp         io/UrlGuard.cpp

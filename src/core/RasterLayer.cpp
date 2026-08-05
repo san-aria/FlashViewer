@@ -1,6 +1,10 @@
 #include "core/RasterLayer.hpp"
 #include "io/DatasetFactory.hpp"
+#include "io/GeolocArrays.hpp"
 #include "util/Logger.hpp"
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <algorithm>
 
@@ -50,8 +54,44 @@ void RasterLayer::initSubdatasetMeta(
 void RasterLayer::switchSubdataset(int idx) {
     if (idx < 0 || idx >= static_cast<int>(m_subdatasets.size()) || idx == m_subdataset_idx)
         return;
-    auto ds = DatasetFactory::openSubdataset(m_subdatasets[static_cast<size_t>(idx)].first);
-    if (!ds) return;
+    const std::string& sub = m_subdatasets[static_cast<size_t>(idx)].first;
+
+    // Geolocation-warped layer (FR-IO-14): the new variable shares the swath's coordinate
+    // arrays, so re-apply the warp. Opening `sub` directly would silently drop the
+    // georeferencing and drop the layer back onto the unreferenced identity grid.
+    std::string open_path = sub;
+    std::vector<std::string> new_temps;
+    if (m_geoloc.valid()) {
+        FvGeolocRequest req;
+        req.data_path = sub;
+        req.x_path    = m_geoloc.x_path;
+        req.y_path    = m_geoloc.y_path;
+        req.srs_wkt   = m_geoloc.crs_wkt;
+        req.out_stem  = QDir(QDir::tempPath())
+                            .filePath(QStringLiteral("fv_geoloc_switch_%1")
+                                          .arg(QDateTime::currentMSecsSinceEpoch()))
+                            .toStdString();
+        const FvGeolocResult r = fvWarpWithGeolocArrays(req);
+        if (!r.ok) {
+            for (const auto& f : r.temp_files) QFile::remove(QString::fromStdString(f));
+            FV_WARN("RasterLayer: could not re-apply geolocation warp to '{}': {}",
+                    sub, r.message);
+            return;   // keep the current, correctly georeferenced variable
+        }
+        open_path = r.warped_path;
+        new_temps = r.temp_files;
+    }
+
+    auto ds = m_geoloc.valid() ? DatasetFactory::open(open_path)
+                               : DatasetFactory::openSubdataset(open_path);
+    if (!ds) {
+        for (const auto& f : new_temps) QFile::remove(QString::fromStdString(f));
+        return;
+    }
+    // The outgoing warp's sidecars stay registered for the reaper: the dataset that held
+    // them open has just been released, but deleting them here would race a Windows handle
+    // that has not closed yet, so they are reaped with the layer instead.
+    for (const auto& f : new_temps) m_temp_sidecars.push_back(f);
     m_ds             = ds;
     m_subdataset_idx = idx;
     setName(DatasetFactory::extractVarName(m_subdatasets[static_cast<size_t>(idx)].first));

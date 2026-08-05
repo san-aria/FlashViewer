@@ -547,6 +547,18 @@ Profile (SRS §6.1).
 > (`.github/workflows/ci-perf.yml`) that trends the numbers without failing the build;
 > select the cases locally with `ctest -R "TC-PERF|TC-CAP-03"`.
 
+> **Optional — the real-data georeferencing case.** `TC-IO-27` re-runs the
+> coordinate-array projection end to end on the sample satellite swath in
+> `sample_data/NetCDF_data/IMAGE0002.nc`. It is **hidden** so neither CI nor a plain
+> `ctest` run depends on an 8 MB data file, and it is not registered as a CTest test;
+> run it directly against the test binary, from anywhere:
+> ```bash
+> ./flashviewer_tests "[.geoloc-realdata]"        # Linux/macOS
+> .\flashviewer_tests.exe "[.geoloc-realdata]"    # Windows
+> ```
+> It `SKIP`s cleanly if the sample file is absent. The equivalent synthetic cases
+> (`TC-IO-17…26`) run in the normal suite and need no data files.
+
 ### 3.2 Smoke test
 
 1. Launch FlashViewer.

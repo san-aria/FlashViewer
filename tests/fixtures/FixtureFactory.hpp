@@ -86,6 +86,34 @@ public:
     // driver is unavailable or multi-subdataset enumeration is unsupported.
     Fixture netcdfMultiVar(int w = 8, int h = 8);
 
+    // F-SWATH: a satellite-swath triple — a data raster plus the 2-D longitude and
+    // latitude GEOLOCATION arrays that georeference it (Phase 24, FR-IO-14). All three
+    // are w×h GeoTIFFs on an identity geotransform with no CRS, exactly as a non-CF
+    // NetCDF variable presents itself.
+    //
+    // The coordinate arrays are deliberately sheared (lon varies down a column, lat
+    // varies along a row), so reading either as a 1-D axis produces the WRONG spacing —
+    // the defect this fixture exists to catch.
+    //
+    // The last `fill_rows` rows of both arrays are set to 2143289344.0, the out-of-range
+    // pad carried by the sample GOES swath, and pixel (0,0) of both is set to the CF
+    // `_FillValue` 9.969209968386869e+36, which is also declared as the band's no-data.
+    struct SwathFixture {
+        std::string data_path, lon_path, lat_path;
+        int    width{0}, height{0}, bands{0};
+        double lon_min{0}, lon_max{0}, lat_min{0}, lat_max{0};  // over VALID samples
+        std::size_t masked_per_array{0};        // fill_rows*w + 1
+        std::size_t out_of_convention{0};       // fill_rows*w (the CF fill is not one)
+    };
+    SwathFixture swathGeoloc(int w = 24, int h = 16, int bands = 2, int fill_rows = 3);
+
+    // F-AXIS: a single 1-D coordinate axis as a GeoTIFF — n×1 when `vertical` is false,
+    // 1×n when it is. value(i) = origin + i*step, except the FIRST `lead_fill` entries,
+    // which are the out-of-range pad (so the axis fit must back-project the origin from a
+    // later sample rather than trusting element 0). No CRS, identity geotransform.
+    Fixture coordAxis1D(int n, bool vertical, double origin, double step,
+                        int lead_fill = 0);
+
     const std::string& tempDir() const { return m_dir; }
 
 private:

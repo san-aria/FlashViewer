@@ -51,6 +51,31 @@ Multi-variable files (NetCDF, HDF5) open through a **Select Variables** dialog l
 - **Separate layers (one per variable)** — the default: one layer per selected variable, each with its own band/colormap/stretch controls and a variable drop-down for switching subdataset in place.
 - **One multi-band layer** — available once two or more variables are selected: the picked variables are stacked into a single layer where band *k* is variable *k*, so three or more variables arrive ready to view as an **RGB composite**. Bands are named after their variables throughout the UI. Combining requires the variables to share raster size, grid, and CRS; when they do not, FlashViewer says why in a non-blocking notice and loads them as separate layers instead. The stack is a managed temporary `.vrt` that is deleted when the layer is removed.
 
+### Georeferencing an Unreferenced Raster
+
+Any raster that opens **without a spatial reference** — an unset geotransform, a missing CRS, or
+both — is offered an **Assign Coordinates** dialog, with Skip always available. This is not limited
+to NetCDF/HDF5: a binary-raw import and a GeoTIFF written without a projection get it too.
+
+- **Coordinate arrays** may be taken from variables of the file being opened *or* from a **separate
+  file** (each of X and Y has its own Browse button; a multi-variable file prompts for which
+  variable). Their shape decides how they are used:
+  - **1-D axes** (`lon[width]`, `lat[height]`) become an affine geotransform, fitted from the median
+    step with the origin back-projected from the first valid sample.
+  - **2-D geolocation arrays** (`lon[h][w]`, `lat[h][w]` — a satellite swath, one coordinate per
+    pixel) are **not** affine, so the variable is *projected onto a regular grid* through them. The
+    result is a lazy warped VRT, so a large swath opens immediately; its intermediate files are
+    managed temporaries removed with the layer. Switching the layer's variable re-applies the
+    projection rather than dropping back to an unreferenced grid.
+- **Fill and out-of-range coordinates are masked before use.** Non-finite samples and the declared
+  `_FillValue` are dropped; for a geographic CRS latitude is bounded by ±90 and longitude by ±360,
+  and longitudes in the 0…360 convention are normalised to −180…180 rather than rejected (a
+  projected CRS gets no such bound). An **amber strip** in the dialog reports how many samples were
+  masked, and an assignment that cannot produce a sensible grid is refused with a reason instead of
+  placing the layer at a meaningless extent.
+- **The CRS** may come from a variable in the file, a typed EPSG / WKT / PROJ string, or the CRS
+  picker behind *Choose…*. Assigning only a CRS leaves a valid existing grid untouched.
+
 ### Band and Colormap Control
 
 - Band Selector widget: choose R/G/B band indices for composite mode or a single band for pseudocolor mode; the colormap appears only in Gray mode (hosted on the Gray page of the band selector). Switching RGB↔Gray keeps a constant panel geometry (no reflow), and the controls keep a fixed size and full width whether the dock spans half or full of the panel (scrolling when the dock is short rather than squeezing the elements)
@@ -214,7 +239,7 @@ LRU cache with a default capacity of 512 tiles. Cache key: `TileKey = {layer_id,
 
 | Version | Date | Notes |
 |---|---|---|
-| 0.2.0 | *in development* | Post-0.1.0 manual-test findings (Phases 15–19: opacity & colorbar, per-pane CRS on layer move, Layer Panel overhaul with pane grouping + multi-select, NetCDF/HDF multi-band variable stack), then: the product version single-sourced from the root `VERSION` file; one shared implementation for the tick checkbox and section-heading idioms across every panel and dialog; the basemap repeating correctly in longitude and placed to sub-pixel accuracy in latitude; a world view on open and on Fit; the **New Pane position picker**; and **colour-coded sync badges** shown wherever a pane is named (pane chrome, region pills, Layers-panel pane headers), each drawn in the sync master's colour. **138 automated tests passing** on Linux and Windows. Accessibility, i18n, packaging/installers and the license audit remain outstanding (SRS Appendix E). |
+| 0.2.0 | *in development* | Post-0.1.0 manual-test findings (Phases 15–19: opacity & colorbar, per-pane CRS on layer move, Layer Panel overhaul with pane grouping + multi-select, NetCDF/HDF multi-band variable stack), then: the product version single-sourced from the root `VERSION` file; one shared implementation for the tick checkbox and section-heading idioms across every panel and dialog; the basemap repeating correctly in longitude and placed to sub-pixel accuracy in latitude; a world view on open and on Fit; the **New Pane position picker**; and **colour-coded sync badges** shown wherever a pane is named (pane chrome, region pills, Layers-panel pane headers), each drawn in the sync master's colour; and **coordinate-array georeferencing** for rasters that carry no spatial reference — 2-D geolocation arrays (satellite swaths) are now *projected* onto a regular grid instead of being mistaken for 1-D axes, fill and out-of-range coordinates are masked before use with the count reported to the user, and the assignment dialog is offered for **any** unreferenced format (binary raw included), accepting coordinate arrays from a separate file and a projection chosen through the CRS picker. **150 automated tests passing** on Linux and Windows. Accessibility, i18n, packaging/installers and the license audit remain outstanding (SRS Appendix E). |
 | 0.1.0 | 2026-07-22 | **Released base.** Implementation revamp Phases 0–12 (test infrastructure, rendering/resampling, multi-pane + sync, on-the-fly per-pane CRS reprojection, GDAL ops, error handling & SSRF guard, performance instrumentation + HUD) closed by the Phase-14 conformance sync; Linux, macOS, and Windows CI; **113 automated tests passing**. Accessibility, i18n, packaging/installers, and the license audit are deferred to 0.2.0 (SRS Appendix E). |
 
 ## Building

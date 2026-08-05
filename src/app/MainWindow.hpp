@@ -4,6 +4,7 @@
 #include <QStringList>
 #include <QByteArray>
 #include <QPixmap>
+#include "app/CoordAssignDialog.hpp"   // CoordAssignment (returned by the assign dialog)
 #include "app/Settings.hpp"
 #include "panels/NoDataWidget.hpp"
 #include "render/PaneLayoutMode.hpp"   // applyPaneLayoutMode / the View → Pane Layout radio
@@ -157,12 +158,24 @@ private:
 
     // Shows the NetCDF coordinate assignment dialog when a subdataset opens with
     // identity geotransform. Returns nullopt when user clicks Skip.
-    struct AssignedCoords { double gt[6]; std::string crs_wkt; };
-    std::optional<AssignedCoords> showNetCdfAssignDialog(
+    std::optional<CoordAssignment> showCoordAssignDialog(
         const QString& displayPath,
         const std::string& parentPath,
         const std::shared_ptr<RasterDataset>& ds,
         const std::vector<std::pair<std::string,std::string>>& subs);
+
+    // Put an assignment into effect, BEFORE the RasterLayer is built (the layer's
+    // constructor auto-stretches off whatever dataset it is handed). A 1-D assignment
+    // overrides the geotransform/CRS in place; a 2-D geolocation assignment REPLACES `ds`
+    // with the warped VRT and returns true, in which case the caller must follow up with
+    // registerCoordAssignment() so the warp's temp files are reaped with the layer.
+    // Returns false — after deleting the orphaned temps — when the warped VRT will not open.
+    bool applyCoordAssignment(std::shared_ptr<RasterDataset>& ds,
+                              const CoordAssignment& a);
+
+    // Record a successful geolocation warp on the layer: its temp sidecars, and the
+    // coordinate arrays that produced it (so a later variable switch re-applies the warp).
+    void registerCoordAssignment(RasterLayer& layer, const CoordAssignment& a);
 
     PaneLayout*            m_pane_layout{nullptr};
     LayerManager*          m_layer_mgr{nullptr};  // single app-wide layer model (Phase 6)
