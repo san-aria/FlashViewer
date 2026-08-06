@@ -45,6 +45,20 @@ inline bool fvTileBandsStale(const GpuTile& tile, const BandMapping& bm) {
         || tile.band_b != bm.blue_idx;
 }
 
+// The stretch a tile must be DRAWN with. A stale tile is not dropped — TileRenderer keeps
+// it on screen as a fallback while its refresh worker decodes the new bands — so pairing it
+// with the layer's live stretch renders the OLD band's texels through the NEW band's range
+// for one frame. That mismatched frame, followed by the refreshed one, is what reads as a
+// flicker when the band changes. A stale tile therefore keeps the stretch stamped at its
+// own upload, and adopts the live values the instant its texels match the mapping again —
+// which keeps a histogram-handle drag live for every tile that is up to date.
+// Free + inline so the rule is unit-testable without a GL context.
+struct FvStretch { float lo, hi; };
+inline FvStretch fvTileDrawStretch(bool stale, float tile_lo, float tile_hi,
+                                   float live_lo, float live_hi) {
+    return stale ? FvStretch{tile_lo, tile_hi} : FvStretch{live_lo, live_hi};
+}
+
 // GPU-accelerated tile renderer with async LOD loading.
 // Phase 2 single-texture is replaced here with a proper tile/LOD system.
 class TileRenderer {

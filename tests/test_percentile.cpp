@@ -171,7 +171,7 @@ TEST_CASE("TC-HST-08 histogram empty state never coexists with band views",
     }
 
     SECTION("Gray shows one band view and still hides the empty label") {
-        layer->bandMapping() = BandMapping::gray(2);
+        layer->setBandMapping(BandMapping::gray(2));
         mgr.notifyLayerChanged(0);
         CHECK(empty->isHidden());
         CHECK(visibleBandViews(panel) == 1);
@@ -181,5 +181,60 @@ TEST_CASE("TC-HST-08 histogram empty state never coexists with band views",
         panel.setSuppressed(true);
         CHECK_FALSE(empty->isHidden());
         CHECK(visibleBandViews(panel) == 0);
+    }
+}
+
+// TC-HST-09 — re-pointing a display channel at another band re-derives that channel's 1/99
+// stretch. Regression: BandSelectorWidget assigned straight into the mapping, so the shader
+// and the histogram handles went on clipping against the band that had been showing before —
+// a band switch appeared to "clip the new band with the old band's histogram".
+TEST_CASE("TC-HST-09 a band switch re-stretches only the channels that moved",
+          "[hist][stretch][TC-HST-09]") {
+    FixtureFactory ff;
+    // Three flat bands with distinct values. A constant band has lo == hi, which
+    // RasterDataset::computeStretchPercentile widens to [v, v+1] — so each band carries an
+    // unmistakable, exactly-predictable stretch.
+    auto a = ff.constantFloat(1.0f, 8, 8);
+    auto b = ff.constantFloat(2.0f, 8, 8);
+    auto c = ff.constantFloat(3.0f, 8, 8);
+    const std::string vrt = fvBuildBandStackVrt(
+        {{a.path, "r"}, {b.path, "g"}, {c.path, "b"}},
+        (std::filesystem::path(ff.tempDir()) / "stretch3.vrt").string());
+    REQUIRE_FALSE(vrt.empty());
+
+    auto ds = DatasetFactory::open(vrt);
+    REQUIRE(ds);
+    RasterLayer layer(ds);
+    REQUIRE_FALSE(layer.bandMapping().isGrayscale());   // 3 bands default to RGB(1,2,3)
+
+    // The constructor's autoStretch() gives every channel its own band's range.
+    CHECK_THAT(layer.channelStretchMin(0), WithinAbs(1.0f, 1e-4));
+    CHECK_THAT(layer.channelStretchMin(2), WithinAbs(3.0f, 1e-4));
+
+    SECTION("Gray follows the newly selected band, not the previously active one") {
+        layer.setBandMapping(BandMapping::gray(3));
+        CHECK_THAT(layer.stretchMin(), WithinAbs(3.0f, 1e-4));
+        CHECK_THAT(layer.stretchMax(), WithinAbs(4.0f, 1e-4));
+
+        layer.setBandMapping(BandMapping::gray(1));
+        CHECK_THAT(layer.stretchMin(), WithinAbs(1.0f, 1e-4));
+        CHECK_THAT(layer.stretchMax(), WithinAbs(2.0f, 1e-4));
+    }
+
+    SECTION("A hand-tuned stretch survives on the channels that did not move") {
+        layer.setChannelStretch(1, -50.0f, 50.0f);          // user drags the Green handles
+        layer.setBandMapping(BandMapping::rgb(3, 2, 1));    // Red and Blue swap; Green stays
+
+        CHECK_THAT(layer.channelStretchMin(0), WithinAbs(3.0f, 1e-4));   // re-derived
+        CHECK_THAT(layer.channelStretchMin(2), WithinAbs(1.0f, 1e-4));   // re-derived
+        CHECK_THAT(layer.channelStretchMin(1), WithinAbs(-50.0f, 1e-4)); // untouched
+        CHECK_THAT(layer.channelStretchMax(1), WithinAbs(50.0f, 1e-4));
+    }
+
+    SECTION("Re-applying the same mapping changes nothing") {
+        layer.setChannelStretch(0, -7.0f, 7.0f);
+        layer.setBandMapping(BandMapping::rgb(1, 2, 3));    // identical to the current one
+        CHECK_THAT(layer.channelStretchMin(0), WithinAbs(-7.0f, 1e-4));
+        CHECK_THAT(layer.channelStretchMax(0), WithinAbs(7.0f, 1e-4));
     }
 }

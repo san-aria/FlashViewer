@@ -184,13 +184,16 @@ void BandSelectorWidget::onBandChanged() {
 void BandSelectorWidget::applyToLayer() {
     if (!m_layer) return;
     bool rgb = m_rgb_radio->isChecked();
+    // setBandMapping (not a raw assignment) so a re-picked band arrives with its OWN 1/99
+    // stretch: the histogram handles and the shader would otherwise keep clipping against
+    // the band that was showing before.
     if (rgb) {
-        m_layer->bandMapping() = BandMapping::rgb(
+        m_layer->setBandMapping(BandMapping::rgb(
             m_r_combo->currentIndex() + 1,
             m_g_combo->currentIndex() + 1,
-            m_b_combo->currentIndex() + 1);
+            m_b_combo->currentIndex() + 1));
     } else {
-        m_layer->bandMapping() = BandMapping::gray(m_gray_combo->currentIndex() + 1);
+        m_layer->setBandMapping(BandMapping::gray(m_gray_combo->currentIndex() + 1));
     }
     emit bandMappingChanged();
 }

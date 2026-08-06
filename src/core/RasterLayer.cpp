@@ -101,6 +101,36 @@ void RasterLayer::switchSubdataset(int idx) {
     autoStretch();
 }
 
+void RasterLayer::setBandMapping(const BandMapping& bm) {
+    const BandMapping old = m_bands;
+    m_bands = bm;
+    if (!m_ds) return;
+
+    // 1/99 of the band a channel now shows — the same percentile pair autoStretch() uses,
+    // read off the same 512-px preview, so a band switch lands exactly where opening the
+    // layer on that band would have.
+    auto restretch = [this](int band, float& lo_out, float& hi_out) {
+        auto [lo, hi] = m_ds->computeStretchPercentile(band, 1.0, 99.0);
+        if (hi <= lo) { lo = 0.0f; hi = 1.0f; }
+        lo_out = lo;
+        hi_out = hi;
+    };
+
+    // Only the channels that MOVED are re-derived: a stretch the user dragged by hand on an
+    // untouched channel is theirs to keep, and re-running the full autoStretch() would throw
+    // it away every time a neighbouring channel was re-picked.
+    const int oldCh[3] = { old.red_idx, old.green_idx, old.blue_idx };
+    const int newCh[3] = { m_bands.red_idx, m_bands.green_idx, m_bands.blue_idx };
+    for (int c = 0; c < 3; ++c)
+        if (oldCh[c] != newCh[c]) restretch(newCh[c], m_ch_lo[c], m_ch_hi[c]);
+
+    // The gray/pseudocolor stretch follows the ACTIVE band, defined exactly as autoStretch()
+    // and hasNoData() define it — the gray band in pseudocolor, red in a composite.
+    const int oldActive = old.isGrayscale()     ? old.grayBand()     : old.red_idx;
+    const int newActive = m_bands.isGrayscale() ? m_bands.grayBand() : m_bands.red_idx;
+    if (oldActive != newActive) restretch(newActive, m_stretch_min, m_stretch_max);
+}
+
 void RasterLayer::autoStretch() {
     if (!m_ds) return;
     int band = m_bands.isGrayscale() ? m_bands.grayBand() : m_bands.red_idx;

@@ -21,7 +21,11 @@ public:
 
     RasterDataset*       dataset()     const { return m_ds.get(); }
     const BandMapping&   bandMapping() const { return m_bands; }
-    BandMapping&         bandMapping()       { return m_bands; }
+    // The ONLY way to re-point a display channel at another band. It re-derives the 1/99
+    // stretch of every channel whose band actually moved, so the image and the histogram
+    // never keep clipping against the band that was showing before. There is deliberately
+    // no mutable bandMapping() accessor: assigning through one left the stretch stale.
+    void setBandMapping(const BandMapping& bm);
 
     float stretchMin() const { return m_stretch_min; }
     float stretchMax() const { return m_stretch_max; }

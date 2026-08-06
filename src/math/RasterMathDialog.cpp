@@ -657,7 +657,7 @@ bool RasterMathDialog::addResultFromPath(const std::string& path, const QString&
     }
     auto result_layer = std::make_shared<RasterLayer>(result_ds);
     result_layer->setName(tr("Result: %1").arg(expr.left(30)));
-    result_layer->bandMapping() = BandMapping::gray(1);
+    result_layer->setBandMapping(BandMapping::gray(1));
     result_layer->setPaneId(paneId);
     result_layer->setOwnsTempFile(ownsTemp);   // temp result → reaped on removal (FR-MTH-9)
     m_mgr->addLayer(result_layer);

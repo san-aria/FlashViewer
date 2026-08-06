@@ -22,8 +22,15 @@ struct GpuTile {
     // RGB↔Gray flip does; comparing the mode flag alone left stale texels on screen.
     // Written only on the UI thread, from the pending_* values, at upload time.
     int         band_r{0}, band_g{0}, band_b{0};
+    // The stretch in force when the RESIDENT texels were uploaded — gray, then per display
+    // channel. A stale tile stays on screen while its refresh decodes (TileRenderer keeps
+    // drawing it as a fallback), so it must be drawn with the stretch that belongs to the
+    // bands it actually holds. Drawing the OLD band's texels through the NEW band's range
+    // produced one visibly wrong frame on every band change — the reported flicker.
     float       stretch_min{0};
     float       stretch_max{1};
+    float       ch_lo[3]{0, 0, 0};
+    float       ch_hi[3]{1, 1, 1};
     std::atomic<bool> upload_ready{false};
     std::atomic<bool> refreshing{false};
 

@@ -209,6 +209,10 @@ bool TileRenderer::ensureTile(QOpenGLFunctions_4_1_Core& gl,
         tile->band_b       = tile->pending_band_b;
         tile->stretch_min  = layer->stretchMin();
         tile->stretch_max  = layer->stretchMax();
+        for (int c = 0; c < 3; ++c) {
+            tile->ch_lo[c] = layer->channelStretchMin(c);
+            tile->ch_hi[c] = layer->channelStretchMax(c);
+        }
         if (!gray) {
             uploadTex2D(gl, tile->cpu_data_r.data(), tile->tile_w, tile->tile_h, tile->texture_r);
             if (!tile->cpu_data_g.empty())
@@ -410,6 +414,17 @@ void TileRenderer::drawTile(QOpenGLFunctions_4_1_Core& gl,
         static_cast<float>(tile.inner_x), static_cast<float>(tile.inner_y),
         static_cast<float>(tile.inner_w), static_cast<float>(tile.inner_h)};
 
+    // A tile awaiting its refresh still holds the PREVIOUS bands' texels, so it is drawn
+    // with the stretch stamped at its own upload rather than the layer's new one — see
+    // fvTileDrawStretch. Live values are used the moment the tile is current again.
+    const bool stale = fvTileBandsStale(tile, layer->bandMapping());
+    const FvStretch gray_s = fvTileDrawStretch(stale, tile.stretch_min, tile.stretch_max,
+                                               layer->stretchMin(), layer->stretchMax());
+    FvStretch ch_s[3];
+    for (int c = 0; c < 3; ++c)
+        ch_s[c] = fvTileDrawStretch(stale, tile.ch_lo[c], tile.ch_hi[c],
+                                    layer->channelStretchMin(c), layer->channelStretchMax(c));
+
     gl.glBindVertexArray(m_quad_vao);
 
     if (!tile.grayscale) {
@@ -419,12 +434,12 @@ void TileRenderer::drawTile(QOpenGLFunctions_4_1_Core& gl,
         m_shader_rgb->setUniform(gl, "u_opacity",     opacity);
         // Per-channel stretch: each display channel stretches its mapped band
         // independently (FR-HST-6 / per-band histograms).
-        m_shader_rgb->setUniform(gl, "u_min_r", layer->channelStretchMin(0));
-        m_shader_rgb->setUniform(gl, "u_max_r", layer->channelStretchMax(0));
-        m_shader_rgb->setUniform(gl, "u_min_g", layer->channelStretchMin(1));
-        m_shader_rgb->setUniform(gl, "u_max_g", layer->channelStretchMax(1));
-        m_shader_rgb->setUniform(gl, "u_min_b", layer->channelStretchMin(2));
-        m_shader_rgb->setUniform(gl, "u_max_b", layer->channelStretchMax(2));
+        m_shader_rgb->setUniform(gl, "u_min_r", ch_s[0].lo);
+        m_shader_rgb->setUniform(gl, "u_max_r", ch_s[0].hi);
+        m_shader_rgb->setUniform(gl, "u_min_g", ch_s[1].lo);
+        m_shader_rgb->setUniform(gl, "u_max_g", ch_s[1].hi);
+        m_shader_rgb->setUniform(gl, "u_min_b", ch_s[2].lo);
+        m_shader_rgb->setUniform(gl, "u_max_b", ch_s[2].hi);
         m_shader_rgb->setUniform(gl, "u_band_r", 0);
         m_shader_rgb->setUniform(gl, "u_band_g", 1);
         m_shader_rgb->setUniform(gl, "u_band_b", 2);
@@ -452,8 +467,8 @@ void TileRenderer::drawTile(QOpenGLFunctions_4_1_Core& gl,
         m_shader_gray->setUniform(gl, "u_view_proj",   vp);
         m_shader_gray->setUniform(gl, "u_tile_extent", tile_ext);
         m_shader_gray->setUniform(gl, "u_opacity",     opacity);
-        m_shader_gray->setUniform(gl, "u_min",         layer->stretchMin());
-        m_shader_gray->setUniform(gl, "u_max",         layer->stretchMax());
+        m_shader_gray->setUniform(gl, "u_min",         gray_s.lo);
+        m_shader_gray->setUniform(gl, "u_max",         gray_s.hi);
         m_shader_gray->setUniform(gl, "u_band",        0);
         m_shader_gray->setUniform(gl, "u_colormap",    1);
         m_shader_gray->setUniform(gl, "u_invert",      layer->colormapInvert() ? 1.0f : 0.0f);

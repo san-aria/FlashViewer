@@ -138,3 +138,42 @@ TEST_CASE("TC-RND-17 tile staleness follows the band selection, not just the mod
         CHECK(fvTileBandsStale(tile, BandMapping::rgb(1, 2, 3)));
     }
 }
+
+// TC-RND-18 — the stretch a tile is DRAWN with follows the texels it actually holds.
+// Regression (flicker on band change): a stale tile stays on screen as a fallback while its
+// refresh decodes, and drawTile read the stretch live off the layer — so the frame right
+// after a band switch showed the OLD band's texels through the NEW band's 1/99 range, then
+// the refreshed tile replaced it. Two visibly different frames per band change.
+TEST_CASE("TC-RND-18 a stale tile keeps its own stretch until it is refreshed",
+          "[render][lod][bands][TC-RND-18]") {
+    // Stamped at upload for the bands the tile holds; the layer has since moved on.
+    constexpr float kTileLo = 10.f, kTileHi = 20.f;
+    constexpr float kLiveLo = 300.f, kLiveHi = 400.f;
+
+    SECTION("Stale: the values stamped at upload, so the visible pixels do not shift") {
+        const FvStretch s = fvTileDrawStretch(true, kTileLo, kTileHi, kLiveLo, kLiveHi);
+        CHECK(s.lo == kTileLo);
+        CHECK(s.hi == kTileHi);
+    }
+
+    SECTION("Fresh: the layer's live values, so a histogram drag stays interactive") {
+        const FvStretch s = fvTileDrawStretch(false, kTileLo, kTileHi, kLiveLo, kLiveHi);
+        CHECK(s.lo == kLiveLo);
+        CHECK(s.hi == kLiveHi);
+    }
+
+    SECTION("Drives off the same staleness rule the refresh scheduler uses") {
+        GpuTile tile;
+        tile.grayscale = false;
+        tile.band_r = 1; tile.band_g = 2; tile.band_b = 3;
+        tile.ch_lo[0] = kTileLo; tile.ch_hi[0] = kTileHi;
+
+        // Red re-picked → stale → the red channel still draws with band 1's range.
+        const bool stale = fvTileBandsStale(tile, BandMapping::rgb(4, 2, 3));
+        REQUIRE(stale);
+        const FvStretch s = fvTileDrawStretch(stale, tile.ch_lo[0], tile.ch_hi[0],
+                                              kLiveLo, kLiveHi);
+        CHECK(s.lo == kTileLo);
+        CHECK(s.hi == kTileHi);
+    }
+}
