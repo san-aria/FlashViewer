@@ -3,6 +3,7 @@
 #include <QColor>
 #include <QString>
 #include <QVector>
+#include "gis/InspectTypes.hpp"   // InspectLayerEntry / InspectPaneGroup (shared, Phase 26)
 #include <string>
 #include <vector>
 #include <memory>
@@ -13,23 +14,6 @@ class RasterLayer;
 class QVBoxLayout;
 class QToolButton;
 class QEvent;
-
-// One layer to sample within a pane group (Phase 6.8). `name` is the row label shown in the
-// group's table (just the layer name — the pane is shown in the group header).
-struct InspectLayerEntry {
-    QString      name;
-    RasterLayer* layer{nullptr};
-};
-
-// A pane's worth of layers to inspect (Phase 6.8). Rendered as a collapsible drop-down whose
-// header shows `paneLabel` on a translucent `paneColor` background. MainWindow assembles these
-// — the inspector stays pane/sync-agnostic.
-struct InspectPaneGroup {
-    uint64_t                  paneId{0};
-    QString                   paneLabel;
-    QColor                    paneColor;
-    QVector<InspectLayerEntry> layers;
-};
 
 class AttributeInspector : public QWidget {
     Q_OBJECT
@@ -53,10 +37,6 @@ protected:
     void changeEvent(QEvent* e) override;
 
 private:
-    // Sample one raster layer's bands at a geo point (given in geoWkt); false if outside/
-    // invalid. The point is transformed geoWkt→source CRS before sampling. No-data → NaN.
-    bool sampleLayer(double geo_x, double geo_y, const std::string& geoWkt,
-                     RasterLayer* rl, std::vector<double>& out) const;
     // Remove all pane-group sections (before rebuilding for a new click).
     void clearGroups();
     // Apply the pane-coloured, theme-compliant style to a drop-down header (pane colour stored

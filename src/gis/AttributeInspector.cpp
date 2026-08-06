@@ -1,5 +1,5 @@
 #include "gis/AttributeInspector.hpp"
-#include "gis/CrsUtil.hpp"
+#include "gis/PixelSampler.hpp"
 #include "core/LayerManager.hpp"
 #include "core/RasterLayer.hpp"
 #include "core/Layer.hpp"
@@ -42,38 +42,6 @@ AttributeInspector::AttributeInspector(QWidget* parent) : QWidget(parent) {
 
 void AttributeInspector::setLayerManager(LayerManager* mgr) {
     m_mgr = mgr;
-}
-
-bool AttributeInspector::sampleLayer(double geo_x, double geo_y, const std::string& geoWkt,
-                                     RasterLayer* rl, std::vector<double>& out) const {
-    out.clear();
-    if (!rl) return false;
-    auto* ds = rl->dataset();
-    if (!ds) return false;
-
-    // The point is in the clicked pane's Project CRS; transform into this layer's SOURCE CRS
-    // so analysis reads the correct source pixel under on-the-fly reprojection (FR-CRS-4).
-    double sx = geo_x, sy = geo_y;
-    fvTransformPoint(geoWkt, ds->crsWkt(), sx, sy);
-    auto px = ds->geoTransform().geoToPixel(sx, sy);
-    int col = static_cast<int>(std::round(px.x));
-    int row = static_cast<int>(std::round(px.y));
-    if (col < 0 || row < 0 || col >= ds->width() || row >= ds->height()) return false;
-
-    TileBuffer buf = ds->readRegion(col, row, 1, 1, 1, 1);
-    if (!buf.isValid()) return false;
-
-    bool has_nd = rl->hasNoData();
-    double nd_v = static_cast<double>(rl->noDataValue());
-    double nd_eps = has_nd ? std::max(std::abs(nd_v) * 1e-5, 1e-10) : 0.0;
-
-    for (int b = 0; b < buf.bands; ++b) {
-        double v = static_cast<double>(buf.data[static_cast<size_t>(b)]);
-        if (has_nd && std::abs(v - nd_v) < nd_eps)
-            v = std::numeric_limits<double>::quiet_NaN();
-        out.push_back(v);
-    }
-    return true;
 }
 
 void AttributeInspector::clearGroups() {
@@ -122,7 +90,7 @@ void AttributeInspector::inspectGroups(double geo_x, double geo_y, const std::st
         std::vector<std::pair<QString, std::vector<double>>> rows;
         for (const auto& e : g.layers) {
             std::vector<double> vals;
-            if (sampleLayer(geo_x, geo_y, geoWkt, e.layer, vals))
+            if (fvSamplePixelBands(e.layer, geo_x, geo_y, geoWkt, vals))
                 rows.emplace_back(e.name, std::move(vals));
         }
         if (rows.empty()) continue;
