@@ -14,10 +14,41 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <cmath>
 
 // --------------------------------------------------------------------------
 // Tick indicator
 // --------------------------------------------------------------------------
+
+void fvPaintCurveSwatch(QPainter* p, const QRect& rect, const QColor& curveColor,
+                        Qt::PenStyle style, const QPalette& pal) {
+    // Same outlined, rounded box as fvPaintTickBox so the legend key reads as part of the
+    // same UI kit — but sized kFvCurveSwatchW × kFvCurveSwatchH, since a dash pattern needs
+    // horizontal room to repeat (see the header).
+    const int w = std::min(kFvCurveSwatchW, rect.width());
+    const int h = std::min(kFvCurveSwatchH, rect.height());
+    QRectF box(0, 0, w - 1.0, h - 1.0);
+    box.moveCenter(QRectF(rect).center());
+
+    p->save();
+    p->setRenderHint(QPainter::Antialiasing, true);
+    p->setPen(QPen(pal.color(QPalette::Mid), 1.0));
+    p->setBrush(pal.color(QPalette::Base));
+    p->drawRoundedRect(box, 3.0, 3.0);
+
+    // The line sample is drawn WITHOUT antialiasing: a 2 px dotted line at this size turns
+    // into a row of grey smudges when antialiased, which is exactly the distinction the
+    // swatch exists to show.
+    QColor c = curveColor.isValid() ? curveColor : pal.color(QPalette::Highlight);
+    QPen pen(c, 2.0);
+    pen.setStyle(style);
+    pen.setCapStyle(Qt::FlatCap);          // round caps close the gaps in a dotted pattern
+    p->setRenderHint(QPainter::Antialiasing, false);
+    p->setPen(pen);
+    const qreal y = std::round(box.center().y());
+    p->drawLine(QPointF(box.left() + 2.5, y), QPointF(box.right() - 2.5, y));
+    p->restore();
+}
 
 void fvPaintTickBox(QPainter* p, const QRect& rect, Qt::CheckState state,
                     const QColor& accent, const QPalette& pal, bool hovered) {

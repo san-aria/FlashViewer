@@ -39,6 +39,12 @@ public:
     bool perfHudVisible() const;
     void setPerfHudVisible(bool on);
 
+    // How plot curves are coloured (FR-ANL-8): 0 = pane hue + lightness + dash (the default,
+    // so a curve names the pane its layer lives in), 1 = the original fixed 10-hue series
+    // palette, cycled by curve position and carrying no pane meaning.
+    int  curveColorScheme() const;
+    void setCurveColorScheme(int scheme);
+
     void saveGeometry(const QByteArray& data);
     QByteArray loadGeometry() const;
 

@@ -11,6 +11,7 @@ static constexpr const char* kOsmTileUrlDefault =
 static constexpr const char* kDisplayResampling = "render/displayResampling";
 static constexpr const char* kLogExportDir       = "log/exportDir";
 static constexpr const char* kPerfHudVisible     = "perf/hudVisible";
+static constexpr const char* kCurveColorScheme   = "plots/curveColorScheme";
 
 Settings::Settings() = default;
 
@@ -68,6 +69,16 @@ bool Settings::perfHudVisible() const {
 void Settings::setPerfHudVisible(bool on) {
     QSettings s;
     s.setValue(kPerfHudVisible, on);
+}
+
+int Settings::curveColorScheme() const {
+    QSettings s;
+    return s.value(kCurveColorScheme, 0).toInt();
+}
+
+void Settings::setCurveColorScheme(int scheme) {
+    QSettings s;
+    s.setValue(kCurveColorScheme, scheme);
 }
 
 void Settings::saveGeometry(const QByteArray& data) {

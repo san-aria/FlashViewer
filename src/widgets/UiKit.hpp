@@ -13,6 +13,7 @@
 
 #include <QCheckBox>
 #include <QColor>
+#include <Qt>
 #include <QPixmap>
 #include <QString>
 
@@ -59,6 +60,20 @@ protected:
 private:
     QColor m_accent;
 };
+
+/// Size of the legend curve swatch, in px. Deliberately NOT square: a dash pattern needs
+/// horizontal room to show a repeat — Qt::DashDotLine at pen width 2 has a period of roughly
+/// 18 px, so inside a 14 px box it draws one dot and reads as a solid line.
+inline constexpr int kFvCurveSwatchW = 30;
+inline constexpr int kFvCurveSwatchH = 14;
+
+/// Paint a legend key for one curve: the same outlined, rounded box as fvPaintTickBox, with a
+/// horizontal sample of the curve drawn through it in its own colour AND pen style. Colour
+/// alone cannot distinguish two layers of one pane, since they share a hue by design
+/// (FR-ANL-8) — the swatch has to carry the dash too, or the legend cannot be read.
+/// Non-interactive: there is no checked/hover state to show.
+void fvPaintCurveSwatch(QPainter* p, const QRect& rect, const QColor& curveColor,
+                        Qt::PenStyle style, const QPalette& pal);
 
 /// A bordered section frame with a bold heading as its first child widget.
 ///
