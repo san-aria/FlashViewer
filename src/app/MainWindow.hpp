@@ -33,8 +33,8 @@ class RasterInfoPanel;
 class AttributeInspector;
 class RasterLayer;
 class RasterDataset;
-class SpectralPlotWindow;
-class ScanPixProfileWindow;
+class SpectralPlotPanel;
+class ScanPixProfilePanel;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -132,6 +132,9 @@ private:
         Qt::DockWidgetArea area{Qt::LeftDockWidgetArea};
         QDockWidget*       tabWith{nullptr};   // re-tab partner, or nullptr
         QAction*           action{nullptr};    // its checkable menu item
+        // Docks whose fresh-build state is a floating window rather than a docked one
+        // (the Spectral Plot, Phase 26). `area` is still where a drag would park it.
+        bool               floating{false};
     };
     void buildPanelsMenu();
     void reopenDockToDefault(const DockEntry& e);
@@ -240,6 +243,12 @@ private:
     QStringList            m_pending_temp_deletions;
     bool                   m_temp_disposed{false};   // disposeTempFiles() runs once
 
-    SpectralPlotWindow*    m_spectral_window{nullptr};
-    ScanPixProfileWindow*  m_profile_window{nullptr};
+    // Spectral Plot (Phase 26): a dock the user can park anywhere, floating by default and
+    // hidden until `S` (or View → Panels) opens it.
+    SpectralPlotPanel*     m_spectral_panel{nullptr};
+    QDockWidget*           m_spectral_dock{nullptr};
+    // Scan/Pixel Profile (Phase 26.2): a dock on the same terms as the Spectral Plot —
+    // floating and closed on a fresh profile, summoned by `P` / Tools.
+    ScanPixProfilePanel*   m_profile_panel{nullptr};
+    QDockWidget*           m_profile_dock{nullptr};
 };

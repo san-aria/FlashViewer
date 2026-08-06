@@ -55,6 +55,8 @@ qt_add_executable(FlashViewer
 
     # GIS overlays / tools
     gis/ScaleBar.hpp               gis/ScaleBar.cpp
+    gis/InspectTypes.hpp
+    gis/PixelSampler.hpp           gis/PixelSampler.cpp
     gis/AttributeInspector.hpp     gis/AttributeInspector.cpp
     gis/GdalOpsDialog.hpp          gis/GdalOpsDialog.cpp
     gis/CrsUtil.hpp
@@ -66,7 +68,6 @@ qt_add_executable(FlashViewer
 
     # Panels
     panels/LayerPanel.hpp          panels/LayerPanel.cpp
-    panels/SvgIconButton.hpp       panels/SvgIconButton.cpp
     panels/MarqueeLabel.hpp        panels/MarqueeLabel.cpp
     panels/BandSelectorWidget.hpp  panels/BandSelectorWidget.cpp
     panels/ColormapSelectorWidget.hpp panels/ColormapSelectorWidget.cpp
@@ -76,11 +77,14 @@ qt_add_executable(FlashViewer
     panels/GpuMonitorPanel.hpp      panels/GpuMonitorPanel.cpp
 
     # Plots
-    plots/SpectralPlotWindow.hpp   plots/SpectralPlotWindow.cpp
-    plots/ScanPixProfileWindow.hpp plots/ScanPixProfileWindow.cpp
+    plots/SpectralPlotPanel.hpp    plots/SpectralPlotPanel.cpp
+    plots/ScanPixProfilePanel.hpp  plots/ScanPixProfilePanel.cpp
 
     # Shared widgets / UI kit (used by both the panels and the dialogs)
+    widgets/SvgIconButton.hpp      widgets/SvgIconButton.cpp
     widgets/UiKit.hpp              widgets/UiKit.cpp
+    widgets/ChartTools.hpp         widgets/ChartTools.cpp
+    widgets/CurveStyle.hpp
 
     # Utilities
     util/MathUtils.hpp
@@ -130,6 +134,16 @@ qt_add_resources(FlashViewer "icons"
         "${CMAKE_SOURCE_DIR}/resources/icons/mirror_dark.svg"
         "${CMAKE_SOURCE_DIR}/resources/icons/trash_light.svg"
         "${CMAKE_SOURCE_DIR}/resources/icons/trash_dark.svg"
+        "${CMAKE_SOURCE_DIR}/resources/icons/zoom_in_light.svg"
+        "${CMAKE_SOURCE_DIR}/resources/icons/zoom_in_dark.svg"
+        "${CMAKE_SOURCE_DIR}/resources/icons/zoom_out_light.svg"
+        "${CMAKE_SOURCE_DIR}/resources/icons/zoom_out_dark.svg"
+        "${CMAKE_SOURCE_DIR}/resources/icons/home_light.svg"
+        "${CMAKE_SOURCE_DIR}/resources/icons/home_dark.svg"
+        "${CMAKE_SOURCE_DIR}/resources/icons/hand_light.svg"
+        "${CMAKE_SOURCE_DIR}/resources/icons/hand_dark.svg"
+        "${CMAKE_SOURCE_DIR}/resources/icons/save_light.svg"
+        "${CMAKE_SOURCE_DIR}/resources/icons/save_dark.svg"
 )
 
 # FR-APP-8 / C-LIC-5 — embed the third-party license manifest (About → Licenses)

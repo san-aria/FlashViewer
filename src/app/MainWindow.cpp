@@ -5,8 +5,8 @@
 #include "app/CoordAssignDialog.hpp"
 #include "app/NewPaneDialog.hpp"
 #include "app/Settings.hpp"
-#include "plots/SpectralPlotWindow.hpp"
-#include "plots/ScanPixProfileWindow.hpp"
+#include "plots/SpectralPlotPanel.hpp"
+#include "plots/ScanPixProfilePanel.hpp"
 #include "render/MapCanvas.hpp"
 #include "render/PaneLayout.hpp"
 #include "core/Layer.hpp"             // kDefaultPaneId
@@ -168,6 +168,18 @@ MainWindow::MainWindow(QWidget* parent)
                 c->update();
             }
         if (m_layer_panel) m_layer_panel->refreshPanes();
+        // A merged spectral plot is a statement about panes that move together; once they no
+        // longer do, it is discarded (Phase 26). Recomputing the group each time — rather than
+        // clearing on any role change — keeps merges alive across a master rename/recolour,
+        // which emits this same signal.
+        if (m_spectral_panel) {
+            QSet<quint64> synced;
+            for (int i = 0; i < m_pane_layout->paneCount(); ++i) {
+                const uint64_t id = m_pane_layout->paneId(i);
+                if (m_pane_layout->paneSynced(id)) synced.insert(id);
+            }
+            m_spectral_panel->dropMergedPlotsOutside(synced);
+        }
     });
 
     // A layer dropped onto a region: create a pane there if the region is empty, then assign
@@ -835,25 +847,35 @@ void MainWindow::setupMenuBar() {
             if (auto* c = m_pane_layout->paneCanvas(i)) c->update();
     });
 
+    // The Spectral Plot is a DOCK now (Phase 26), not a Tools window — but it keeps its Tools
+    // entry and its `S` shortcut as the way to summon it. Deliberately NOT the View → Panels
+    // toggle: that one restores a dock to its fresh-build placement, which would rip a docked
+    // Spectral Plot back out into a floating window every time. This only shows and raises it,
+    // wherever the user has put it. ApplicationShortcut so `S` also works while the floating
+    // plot (a separate top-level window) holds focus. The dock itself is built in setupDocks(),
+    // which runs later — hence the null check rather than a captured pointer.
     auto* actSpectral = toolsMenu->addAction(tr("&Spectral Plot (S)"));
     actSpectral->setShortcut(Qt::Key_S);
+    actSpectral->setShortcutContext(Qt::ApplicationShortcut);
     connect(actSpectral, &QAction::triggered, this, [this] {
-        if (!m_spectral_window) {
-            m_spectral_window = new SpectralPlotWindow(m_layer_mgr, this);
-            connect(m_canvas, &MapCanvas::pixelInspectRequest,
-                    m_spectral_window, &SpectralPlotWindow::addPoint);
-        }
-        m_spectral_window->show(); m_spectral_window->raise();
+        if (!m_spectral_dock) return;
+        m_spectral_dock->show();
+        m_spectral_dock->raise();
+        if (m_spectral_dock->isFloating()) m_spectral_dock->activateWindow();
     });
 
+    // Also a DOCK since Phase 26.2, on the same terms as the Spectral Plot above: the Tools
+    // entry and `P` show + raise it wherever the user parked it, and recompute so the panel
+    // is never opened showing a stale profile.
     auto* actProfile = toolsMenu->addAction(tr("Scan/Pixel &Profile (P)"));
     actProfile->setShortcut(Qt::Key_P);
+    actProfile->setShortcutContext(Qt::ApplicationShortcut);
     connect(actProfile, &QAction::triggered, this, [this] {
-        if (!m_profile_window) {
-            m_profile_window = new ScanPixProfileWindow(m_layer_mgr, this);
-        }
-        m_profile_window->show(); m_profile_window->raise();
-        m_profile_window->compute();
+        if (!m_profile_dock) return;
+        m_profile_dock->show();
+        m_profile_dock->raise();
+        if (m_profile_dock->isFloating()) m_profile_dock->activateWindow();
+        if (m_profile_panel) m_profile_panel->compute();
     });
 
     // ---- Help ----
@@ -1143,6 +1165,8 @@ void MainWindow::setupDocks() {
                 rep = m_layer_mgr->layerAt(topLayerIndexInPane(pid));
             if (rep.get() == l.get()) m_attr_insp->removePaneGroup(pid);
         }
+        // Drop the removed layer's spectra (and its membership of any merged plot) — Phase 26.
+        if (m_spectral_panel) m_spectral_panel->forgetLayer(rl_removed->layerId());
     });
     // A layer change (e.g. visibility toggle) re-evaluates each pane's legend so the colorbar
     // appears/disappears with the rendered layer (Phase 6.4.2, point 1).
@@ -1248,10 +1272,55 @@ void MainWindow::setupDocks() {
 
     resizeDocks({infoDock, gpuDock}, {300, 300}, Qt::Vertical);   // ≈ half each
 
+    // Spectral Plot dock (Phase 26, FR-ANL-1). A dock rather than a separate window, so the
+    // user can park it left / right / bottom — but it starts as a FLOATING window and hidden,
+    // because a spectral curve is a deliberate tool, not something that should eat panel space
+    // from the moment the app opens. addDockWidget() first: a QDockWidget can only be floated
+    // once it belongs to a main window.
+    auto* spectralDock = new QDockWidget(tr("Spectral Plot"), this);
+    spectralDock->setObjectName("SpectralDock");
+    spectralDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea
+                                   | Qt::BottomDockWidgetArea);
+    m_spectral_panel = new SpectralPlotPanel(spectralDock);
+    m_spectral_panel->setLayerManager(m_layer_mgr);
+    spectralDock->setWidget(m_spectral_panel);
+    addDockWidget(Qt::BottomDockWidgetArea, spectralDock);
+    spectralDock->setFloating(true);
+    spectralDock->resize(720, 430);
+    spectralDock->hide();
+    m_spectral_dock = spectralDock;
+
+    // Closing the panel discards its plots: they are a live working set, not a document.
+    // visibilityChanged also fires when the dock merely loses the front of a tab group, so
+    // the handler re-checks isHidden() — only an actual close forgets anything.
+    connect(spectralDock, &QDockWidget::visibilityChanged, this, [this](bool visible) {
+        if (!visible && m_spectral_dock && m_spectral_dock->isHidden() && m_spectral_panel)
+            m_spectral_panel->forgetAll();
+    });
+
+    // Scan/Pixel Profile dock (Phase 26.2, FR-ANL-2/3) — built on the same terms as the
+    // Spectral Plot above, for the same reason: a profile is a deliberate tool, not something
+    // that should claim panel space from launch.
+    auto* profileDock = new QDockWidget(tr("Scan/Pixel Profile"), this);
+    profileDock->setObjectName("ProfileDock");
+    profileDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea
+                                  | Qt::BottomDockWidgetArea);
+    m_profile_panel = new ScanPixProfilePanel(m_layer_mgr, profileDock);
+    // The profiled layer's pane colour — the panel is pane-agnostic, MainWindow owns the
+    // PaneLayout, exactly as the Layers panel's colour resolver is wired.
+    m_profile_panel->setPaneColorResolver(
+        [this](quint64 pid) { return m_pane_layout->paneColorForId(pid); });
+    profileDock->setWidget(m_profile_panel);
+    addDockWidget(Qt::BottomDockWidgetArea, profileDock);
+    profileDock->setFloating(true);
+    profileDock->resize(760, 520);
+    profileDock->hide();
+    m_profile_dock = profileDock;
+
     // Track every dock with its fresh-build placement so View → Panels can re-open a
     // closed panel at its original location (FR-APP-9). reserve() first: buildPanelsMenu
     // captures &element into lambdas, so the vector must never reallocate afterward.
-    m_docks.reserve(7);
+    m_docks.reserve(9);
     m_docks.append({layerDock, Qt::LeftDockWidgetArea,   nullptr,  nullptr});
     m_docks.append({propDock,  Qt::LeftDockWidgetArea,   nullptr,  nullptr});
     m_docks.append({histoDock, Qt::LeftDockWidgetArea,   propDock, nullptr});
@@ -1259,6 +1328,8 @@ void MainWindow::setupDocks() {
     m_docks.append({attrDock,  Qt::RightDockWidgetArea,  infoDock, nullptr});
     m_docks.append({logDock,   Qt::BottomDockWidgetArea, nullptr,  nullptr});
     m_docks.append({gpuDock,   Qt::RightDockWidgetArea,  nullptr,  nullptr});
+    m_docks.append({spectralDock, Qt::BottomDockWidgetArea, nullptr, nullptr, /*floating=*/true});
+    m_docks.append({profileDock,  Qt::BottomDockWidgetArea, nullptr, nullptr, /*floating=*/true});
 
     // Default left-column split: the Layers list (top) and the tabbed Layer
     // Properties / Histogram group (bottom) each take ≈ half the column's height, so
@@ -1310,6 +1381,9 @@ void MainWindow::reopenDockToDefault(const DockEntry& e) {
     addDockWidget(e.area, e.dock);                 // relocate to the fresh-build area
     if (e.tabWith && !e.tabWith->isHidden() && !e.tabWith->isFloating())
         tabifyDockWidget(e.tabWith, e.dock);       // rejoin its original tab group
+    // A dock whose fresh-build state is a floating window (Spectral Plot) goes back to
+    // floating — addDockWidget above has just re-parented it into `e.area`.
+    if (e.floating) e.dock->setFloating(true);
     e.dock->show();
     e.dock->raise();
 }
@@ -1873,7 +1947,21 @@ void MainWindow::inspectFromPane(MapCanvas* clicked, double gx, double gy, bool 
 
     // (gx,gy) are in the clicked pane's Project CRS; pass it so the inspector samples each
     // layer's SOURCE pixel by transforming into the layer's source CRS (Phase 11, FR-CRS-4).
-    m_attr_insp->inspectGroups(gx, gy, clicked ? clicked->projectCrsWkt() : std::string(), groups);
+    const std::string geoWkt = clicked->projectCrsWkt();
+    m_attr_insp->inspectGroups(gx, gy, geoWkt, groups);
+
+    // The Spectral Plot is fed the SAME groups (Phase 26), so its curves and the inspector's
+    // rows always describe one selection: left-click ⇒ the topmost/representative layer of
+    // each pane, right-click ⇒ every visible raster — merged into one plot when the gesture
+    // spans more than one layer.
+    //
+    // Only while the panel is OPEN, though: inspect mode is used for the Pixel Inspector far
+    // more often than for a spectrum, and silently accumulating plots behind a closed panel
+    // both costs a raster read per click and means opening it later shows a history the user
+    // never asked to build. `isHidden()` rather than `isVisible()` — a dock sitting behind a
+    // sibling tab is open, just not front (the same distinction View → Panels makes).
+    if (m_spectral_panel && m_spectral_dock && !m_spectral_dock->isHidden())
+        m_spectral_panel->addInspectResult(gx, gy, geoWkt, groups, allLayers);
 
     // Mirror the red inspect-highlight square onto every target pane at the shared geo point
     // (Phase 6.8.3): the clicked pane already self-highlights in MapCanvas::mousePressEvent;
@@ -1924,6 +2012,14 @@ void MainWindow::onActiveLayerChanged(int index) {
     if (m_multi_select) rl = nullptr;
     refreshLayerProperties(rl);
     updatePaneLegends();
+
+    // Phase 26: the Spectral Plot follows the activated layer — its stored plot if inspect
+    // mode has sampled it (the whole merged plot when the layer belongs to one), else a blank
+    // chart titled with the layer's name. It is NOT gated on m_multi_select: a merged plot is
+    // inherently about several layers, so blanking it on a multi-selection would hide exactly
+    // the case it exists for. It IS driven by `index`, not `rl`, so the panel keeps naming
+    // the layer even when the per-layer property widgets are blanked.
+    if (m_spectral_panel) m_spectral_panel->showLayerPlot(index);
 
     // Reflect the active layer's display-resampling mode in the View menu radios
     // (fall back to the persisted default when there is no active raster layer).
