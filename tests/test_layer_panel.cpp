@@ -453,10 +453,86 @@ TEST_CASE("TC-LYR-21 releasing away from a row keeps the selection and the trash
     }
 }
 
+// TC-LYR-16 — the subdataset (NetCDF/HDF variable) picker must not consume the wheel while
+// unfocused. The pointer crosses that combo whenever the Layers tree is scrolled, and
+// QComboBox's default handler stepped to the next variable — which re-opens the dataset,
+// re-derives the stretch and re-renders every tile — instead of scrolling the panel.
 #include "io/DatasetFactory.hpp"
 #include "core/RasterLayer.hpp"
 #include "fixtures/FixtureFactory.hpp"
 #include <QComboBox>
+#include <QWheelEvent>
+
+namespace {
+void wheelOver(QWidget* w, int delta) {
+    const QPointF p = w->rect().center();
+    QWheelEvent ev(p, w->mapToGlobal(p), QPoint(0, delta), QPoint(0, delta),
+                   Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(w, &ev);
+}
+} // namespace
+
+TEST_CASE("TC-LYR-16 scrolling over the variable picker does not switch the variable",
+          "[layerpanel][subdataset][TC-LYR-16]") {
+    FixtureFactory ff;
+    auto fx = ff.netcdfMultiVar(8, 8);
+    if (fx.path.empty()) SKIP("GDAL netCDF driver unavailable");
+    auto subs = DatasetFactory::listSubdatasets(fx.path);
+    REQUIRE(subs.size() >= 2);
+    auto ds0 = DatasetFactory::openSubdataset(subs[0].first);
+    REQUIRE(ds0 != nullptr);
+
+    auto layer = std::make_shared<RasterLayer>(ds0);
+    layer->initSubdatasetMeta(fx.path, subs, 0);
+    layer->setPaneId(1);
+
+    LayerManager mgr;
+    mgr.addLayer(layer);
+
+    LayerPanel panel;
+    panel.setPaneListResolver([] {
+        return std::vector<std::pair<quint64, QString>>{{1, "Pane 1"}};
+    });
+    panel.setPaneColorResolver([](uint64_t) { return QColor(0, 120, 255); });
+    panel.setLayerManager(&mgr);
+    panel.resize(340, 300);
+    panel.show();
+
+    auto* tree  = panelTree(panel);
+    REQUIRE(tree != nullptr);
+    auto* combo = tree->findChild<QComboBox*>();
+    REQUIRE(combo != nullptr);
+    REQUIRE(combo->count() >= 2);
+    REQUIRE(combo->currentIndex() == 0);
+
+    SECTION("unfocused: the wheel is ignored, in both directions") {
+        REQUIRE_FALSE(combo->hasFocus());
+        wheelOver(combo, -120);
+        CHECK(combo->currentIndex() == 0);
+        CHECK(layer->subdatasetIndex() == 0);   // the dataset was never re-opened
+        wheelOver(combo, 120);
+        CHECK(combo->currentIndex() == 0);
+    }
+
+    SECTION("the wheel must not focus the combo either") {
+        // ClickFocus, not the default WheelFocus — otherwise the first scroll would arm the
+        // behaviour for the second.
+        wheelOver(combo, -120);
+        CHECK_FALSE(combo->hasFocus());
+    }
+
+    SECTION("focused by a deliberate click: the wheel works normally") {
+        panel.activateWindow();
+        QApplication::setActiveWindow(&panel);
+        combo->setFocus(Qt::MouseFocusReason);
+        QApplication::processEvents();
+        if (!combo->hasFocus())
+            SKIP("offscreen platform will not give the window keyboard focus");
+        wheelOver(combo, -120);
+        CHECK(combo->currentIndex() == 1);
+        CHECK(layer->subdatasetIndex() == 1);
+    }
+}
 
 // TC-LYR-17 — moving the pointer over the subdataset (NetCDF variable) picker must not
 // disturb the selection. setItemWidget registers that combo as a PERSISTENT EDITOR for its

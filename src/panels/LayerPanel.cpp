@@ -14,6 +14,7 @@
 #include <QAction>
 #include <QInputDialog>
 #include <QKeyEvent>
+#include <QWheelEvent>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
@@ -166,6 +167,27 @@ public:
             ? opt.rect.left() + kSyncBadgeMargin
             : opt.rect.right() - kSyncBadgePx - kSyncBadgeMargin + 1;
         p->drawPixmap(QRect(x, y, kSyncBadgePx, kSyncBadgePx), badge);
+    }
+};
+
+// The subdataset (NetCDF/HDF variable) picker. A combo living inside a scrollable panel must
+// not eat the wheel: the pointer crosses it whenever the Layers tree is scrolled, and
+// QComboBox's default handler would step to the next variable — which re-opens the dataset,
+// re-derives the stretch and re-renders every tile — instead of scrolling the list. The wheel
+// is honoured only once the combo has been deliberately focused by a click; otherwise it is
+// ignored so it bubbles up to the tree's scroll area.
+class FvVariableComboBox : public QComboBox {
+public:
+    explicit FvVariableComboBox(QWidget* parent = nullptr) : QComboBox(parent) {
+        // ClickFocus, not the default WheelFocus: a wheel must never focus the combo, or the
+        // first scroll would arm the very behaviour this class exists to prevent.
+        setFocusPolicy(Qt::ClickFocus);
+    }
+
+protected:
+    void wheelEvent(QWheelEvent* e) override {
+        if (hasFocus()) { QComboBox::wheelEvent(e); return; }
+        e->ignore();
     }
 };
 
@@ -669,7 +691,7 @@ void LayerPanel::rebuildList() {
                                    selectedPanes.contains(grp.paneId));
                     child->setFirstColumnSpanned(true);
 
-                    auto* combo = new QComboBox(m_tree);
+                    auto* combo = new FvVariableComboBox(m_tree);
                     for (const auto& [name, desc] : rl->subdatasets()) {
                         combo->addItem(QString::fromStdString(desc.empty() ? name : desc));
                     }
