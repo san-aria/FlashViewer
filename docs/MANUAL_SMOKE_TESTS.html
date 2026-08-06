@@ -178,7 +178,7 @@
 <main class="wrap">
   <p class="muted small">Companion catalogue to
     <a href="SRS.md">SRS</a> · <a href="SDD.md">SDD</a> · <a href="TEST_SPEC.md">TEST_SPEC</a> ·
-    <a href="FLASHVIEWER_REVAMP_PLAN.md">Revamp Plan</a>. The automated suite (104 <code>ctest</code>
+    <a href="FLASHVIEWER_REVAMP_PLAN.md">Revamp Plan</a>. The automated suite (158 <code>ctest</code>
     cases) guards unit/headless-GL logic; this is the human counterpart — end-to-end GUI scenarios run
     before a release (or per changed phase). Every scenario is traceable to the SRS FRs, SDD sections,
     and incremental fixes; the closing matrix proves every implemented FR is exercised. Marks and notes
@@ -273,26 +273,29 @@
         <tr><td>FR-IO-3</td><td>ST-P2-2, ST-P10-2</td><td>✓</td></tr>
         <tr><td>FR-IO-4</td><td>ST-P2-3</td><td>✓</td></tr>
         <tr><td>FR-IO-5, FR-IO-6</td><td>ST-P2-4</td><td>✓</td></tr>
-        <tr><td>FR-IO-8, FR-IO-10</td><td>ST-P2-5</td><td>✓</td></tr>
+        <tr><td>FR-IO-8, FR-IO-10</td><td>ST-P2-5, ST-P25-5</td><td>✓</td></tr>
         <tr><td>FR-IO-9</td><td>ST-P2-6</td><td>✓</td></tr>
         <tr><td>FR-IO-12</td><td>ST-P2-7, ST-P19-2</td><td>✓</td></tr>
         <tr><td>FR-IO-13</td><td>ST-P19-1, ST-P19-2, ST-P19-3, ST-P19-4</td><td>✓</td></tr>
+        <tr><td>FR-IO-14, FR-IO-15</td><td>ST-P24-1, ST-P24-2, ST-P24-3, ST-P24-6, ST-P25-8</td><td>✓</td></tr>
         <tr><td>FR-RND-1, FR-RND-2, FR-RND-3</td><td>ST-P3-1</td><td>✓</td></tr>
         <tr><td>FR-RND-4, FR-RND-5</td><td>ST-P3-5</td><td>✓</td></tr>
         <tr><td>FR-RND-6, FR-RND-7</td><td>ST-P3-6</td><td>✓</td></tr>
         <tr><td>FR-RND-8</td><td>ST-P3-4, ST-P3-R1, ST-P11-R1</td><td>✓</td></tr>
         <tr><td>FR-RND-9</td><td>ST-P3-7</td><td>✓</td></tr>
         <tr><td>FR-RND-10</td><td>ST-P3-2, ST-P3-3, ST-P3-R1</td><td>✓</td></tr>
+        <tr><td>FR-RND-11</td><td>ST-P25-6</td><td>✓</td></tr>
         <tr><td>FR-NAV-1, FR-NAV-2, FR-NAV-3, FR-NAV-4, FR-NAV-5</td><td>ST-P3-1</td><td>✓</td></tr>
-        <tr><td>FR-BND-1</td><td>ST-P4-1, ST-P19-2, ST-P19-5</td><td>✓</td></tr>
+        <tr><td>FR-BND-1</td><td>ST-P4-1, ST-P19-2, ST-P19-5, ST-P25-6, ST-P25-7</td><td>✓</td></tr>
         <tr><td>FR-BND-2, FR-BND-3, FR-BND-4</td><td>ST-P4-2</td><td>✓</td></tr>
         <tr><td>FR-BND-5, FR-BND-6</td><td>ST-P4-3</td><td>✓</td></tr>
         <tr><td>FR-HST-1, FR-HST-2, FR-HST-3, FR-HST-4, FR-HST-5</td><td>ST-P4-4, ST-P4-R1</td><td>✓</td></tr>
         <tr><td>FR-HST-6</td><td>ST-P4-5, ST-P19-6</td><td>✓</td></tr>
         <tr><td>FR-LYR-1, FR-LYR-2, FR-LYR-3, FR-LYR-4, FR-LYR-5, FR-LYR-6</td><td>ST-P6-1, ST-P15-1, ST-P15-2, ST-P18-1, ST-P18-5</td><td>✓</td></tr>
-        <tr><td>FR-LYR-7</td><td>ST-P18-2, ST-P18-3, ST-P18-4, ST-P19-7</td><td>✓</td></tr>
+        <tr><td>FR-LYR-7</td><td>ST-P18-2, ST-P18-3, ST-P18-4, ST-P19-7, ST-P25-1, ST-P25-2, ST-P25-3</td><td>✓</td></tr>
         <tr><td>FR-LYR-8</td><td>ST-P18-8</td><td>✓</td></tr>
-        <tr><td>FR-LYR-9</td><td>ST-P18-9</td><td>✓</td></tr>
+        <tr><td>FR-LYR-9</td><td>ST-P18-9, ST-P25-4</td><td>✓</td></tr>
+        <tr><td>FR-LYR-10</td><td>ST-P25-1, ST-P25-2, ST-P25-3, ST-P25-4</td><td>✓</td></tr>
         <tr><td>FR-LYR-8</td><td>ST-P18-8, ST-P21-2, ST-P21-4</td><td>✓</td></tr>
         <tr><td>FR-PNE-12</td><td>ST-P18-7</td><td>✓</td></tr>
         <tr><td>FR-OPS-1, FR-OPS-3, FR-OPS-4</td><td>ST-P9-1</td><td>✓</td></tr>
@@ -540,6 +543,16 @@ const PHASES = [
   {st:"ST-P24-4", reg:true, steps:"`File → Open` a headless BINARY raster and complete the Binary Import dialog. Then open a GeoTIFF that has a valid grid but NO projection", expected:"The Assign Coordinates dialog now appears for BOTH — it is no longer NetCDF-only. For the binary file it says no spatial reference was found; for the unprojected GeoTIFF it says the raster has a valid grid but no CRS, and choosing only a CRS leaves the existing grid untouched (the raster does not jump to the identity grid). Skip opens the file unreferenced in either case", covers:"FR-IO-9 (any unreferenced format; CRS-only assignment)", tc:"—"},
   {st:"ST-P24-5", reg:true, steps:"In the Assign Coordinates dialog click the … button beside X / Longitude and pick a coordinate array from a DIFFERENT file (choose the variable when prompted). Then switch the CRS row to “EPSG / projection code” and use “Choose…” to pick a projection; also try typing `4326`, `EPSG:32633` and a PROJ string", expected:"The browsed array joins the drop-down named `file : variable` and behaves exactly like an in-file variable; browsing the same array twice does not duplicate the entry. The Choose… button opens the shared CRS picker and fills the field with the authority code it resolved. A typed code, an `EPSG:…` string and a PROJ string are all accepted. For a file with no CRS variable at all, the dialog STARTS on the code branch rather than on an empty “From file variable” list", covers:"FR-IO-9 (separate file, CRS picker) · FR-CRS-2", tc:"—"},
   {st:"ST-P24-6", reg:true, steps:"Deliberately assign the WRONG arrays — e.g. pick the `data` variable itself as X, or arrays from a differently sized file. Then complete a correct swath load, remove the layer, and inspect the system temp directory for `fv_geoloc_*` files", expected:"A bad assignment is REFUSED with a reason in the amber strip and the dialog STAYS OPEN so different arrays can be picked — it never drops you into a layer at a nonsensical extent, and it leaves no files behind. After a correct load and removal, no `fv_geoloc_*` masked rasters or VRTs remain: the warp's sidecars are reaped with the layer, not just its own source file", covers:"FR-IO-15 (refusal) · NFR-REL-4 · FR-OPS-8 (sidecar reaping)", tc:"TC-IO-25, TC-IO-26"}
+ ]},
+ {id:"P25", title:"Phase 25 (0.2.0) — Layers panel: a selection that stays put, and a band change that re-stretches", frs:"FR-LYR-10 · FR-LYR-9 · FR-LYR-7 · FR-IO-10 · FR-BND-1 · FR-RND-11 · FR-IO-15", rows:[
+  {st:"ST-P25-1", reg:true, steps:"With at least three layers spread over three panes, click one layer row, then `Ctrl`+click two more rows and a pane header. Repeat the whole sequence with `Shift` held for a range. Do this on LINUX if you have it — that is where it failed", expected:"Every Ctrl/Shift-click ADDS to the selection and nothing silently drops back off. The trash button stays enabled and the count the panel highlights is the count Delete would act on. Before this phase the panel's own follow-the-active-layer call re-derived its selection command from the live modifier state, so a Ctrl-click toggled its own row straight off again — accurately on X11, which is why the symptom was Linux-only", covers:"FR-LYR-10 (programmatic current-row change) · FR-LYR-7", tc:"TC-LYR-18"},
+  {st:"ST-P25-2", reg:true, steps:"Select two layer rows of one pane AND another pane's header (3 items). Now force a rebuild of the list without touching the selection: rename a pane (gear → Edit ID…), recolour one (gear → Color…), or sync/unsync a pair", expected:"All three items are still selected afterwards — the PANE HEADER included. Previously the header lost its selection while its child rows stayed highlighted, so the panel showed one set and the trash button acted on another", covers:"FR-LYR-10 (rebuild) · FR-LYR-7", tc:"TC-LYR-19"},
+  {st:"ST-P25-3", reg:true, steps:"Select a few rows, then press the mouse button ON one of the selected labels, slide the pointer OFF the row into the empty area below the list, and release. Repeat starting on a pane header. Finally click the empty background directly", expected:"Releasing away from the row KEEPS the whole selection and the trash button stays enabled. Clicking the empty background still deselects everything — the two gestures both end on empty space, so only the press position tells them apart", covers:"FR-LYR-10 (release off a row)", tc:"TC-LYR-21"},
+  {st:"ST-P25-4", reg:true, steps:"Select several rows, then simply MOVE the pointer up and down over the list — across selected rows, across unselected ones, and in particular across a NetCDF/HDF layer's variable drop-down. Do not click, do not scroll", expected:"Nothing changes: the pane-coloured band on each selected row keeps its selected strength under the pointer, the selection count is unchanged, the trash button stays enabled, and the Band/Colormap/Histogram/Info panels do not blank. Unselected rows still show the theme's normal hover feedback. Two separate defects met here — the theme's opaque hover fill repainted the band away, and hovering the drop-down (a persistent editor) focused it and took the selection with it", covers:"FR-LYR-9 (hover) · FR-LYR-10 (hover into an editor)", tc:"TC-LYR-20, TC-LYR-17"},
+  {st:"ST-P25-5", reg:true, steps:"Load a multi-variable NetCDF/HDF file so a layer row carries a variable drop-down. Put enough layers in the panel to make it scrollable, then scroll with the wheel so the pointer passes OVER that drop-down. Afterwards click the drop-down and scroll again", expected:"Scrolling moves the LIST and never changes the variable — the displayed image, the histogram and the Layer Info panel are all untouched. After a deliberate click on the drop-down, the wheel changes variables normally", covers:"FR-IO-10 (a variable switch takes a deliberate act)", tc:"TC-LYR-16"},
+  {st:"ST-P25-6", reg:true, steps:"On a multi-band layer in RGB mode, re-pick the RED channel's band in the Band Selector and watch BOTH the image and the histogram. Then switch to Gray and change the band there. Watch the transition frame closely on a large raster", expected:"The new band arrives with its OWN 1/99 stretch: the image is contrast-correct immediately and the histogram handles sit on the new band's range — not clipped by the previous band's. The change happens in ONE visible step: there is no brief frame in which the old pixels are shown through the new range before the tiles refresh", covers:"FR-BND-1 (re-stretch on band change) · FR-RND-11 (no mismatched frame)", tc:"TC-HST-09, TC-RND-18"},
+  {st:"ST-P25-7", steps:"On a layer whose stretch you have dragged by hand on the GREEN channel, re-pick only the RED channel's band", expected:"Red is re-derived from its new band while GREEN keeps the stretch you set. Only the channels that actually moved are re-stretched", covers:"FR-BND-1 (hand-set stretch preserved)", tc:"TC-HST-09"},
+  {st:"ST-P25-8", steps:"Open a NetCDF whose longitudes run 0…360 and assign its coordinate arrays; read the amber strip in the Assign Coordinates dialog", expected:"The strip states the conventions as INTERVALS — “Longitudes were given in the [0, 360) convention and have been normalised to [-180, 180].” The half-open and closed forms are not interchangeable: the shift subtracts 360 from values above 180", covers:"FR-IO-15 (convention wording)", tc:"TC-IO-18"}
  ]},
  {id:"X", title:"Cross-cutting integration scenario", frs:"integration of phase seams", rows:[
   {st:"ST-X-1", steps:"Load DS-L8 (UTM) and DS-DEM (4326); switch to Quarter layout; put each in its own pane and set different Project CRS per pane; enable the basemap; Sync two panes as master/slave and pan (ghost cursor + co-location); `Ctrl`+click to inspect across the sync group (source values, flush highlight in every synced pane); run NDVI in Raster Math landing in a New Pane; Export Logs and capture an Entire pane layout screenshot", expected:"Every seam holds — per-pane CRS, reprojected basemap, sync, source-pixel inspect, math output routing, screenshot composite — with no crash and a clean log", covers:"integration of FR-CRS-1/4/8, FR-PNE-8/9/10, FR-OSM-8, FR-MTH-4/8, FR-APP-5/12", tc:"—"}
