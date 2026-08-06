@@ -507,7 +507,8 @@ statistics, the colorbar corner re-anchor, the world view presented on open and 
 Fit, the basemap's longitude wrap-copy range and its sub-pixel Mercator row
 tessellation, the New-Pane position picker's slot → (layout mode, region)
 mapping, coordinate-array georeferencing (fill masking, longitude conventions,
-1-D axis fitting and the 2-D swath warp), and the Layers panel — its grouping and
+1-D axis fitting and the 2-D swath warp), the plot curve-styling rule (a pane's first curve is its pane colour exactly; the
+lightness ramp stays separable within a family), and the Layers panel — its grouping and
 multi-delete logic plus the selection-persistence cases, which drive the **real**
 `LayerPanel` widget and include a pixel check of a selected row's pane band under
 hover against the shipped theme. Tests that need an unavailable capability skip
@@ -573,7 +574,8 @@ Profile (SRS §6.1).
 4. Press `Space` to fit the layer to the view.
 5. Open the **Layers** dock and confirm the raster is listed under a **collapsible, pane-coloured group header** for its pane, and that its visibility toggle draws a **tick in the pane's colour** when checked.
 6. Open the **GPU Monitor** dock (View → Panels) and confirm the resident-VRAM readout/sparkline updates as you pan and zoom.
-7. In the **Log** dock, click **Export Logs…** and confirm a `.txt` file is written.
+7. Press `S` (or **Tools → Spectral Plot**) — the **Spectral Plot** panel opens as a floating window titled with the active layer. Turn on **Inspect** (`I`), click a pixel, and confirm the curve appears and its values match the **Pixel Inspector** table. Zoom with the ⊕/⊖ buttons or the wheel, drag the plot to pan, press ⌂ to return, and use **Save** to write a PNG. Confirm the curve is drawn in the layer's **pane colour** and that the legend to the right of the plot shows that colour together with the line style. Press the ✎ beside the legend entry, rename it, then clear the field to confirm the automatic label returns. Drag the panel into a dock area to confirm it docks, then press `P` and repeat the dock check on the **Scan/Pixel Profile** panel.
+8. In the **Log** dock, click **Export Logs…** and confirm a `.txt` file is written.
 
 ### 3.3 Data directories and the application log
 

@@ -99,7 +99,7 @@ to NetCDF/HDF5: a binary-raw import and a GeoTIFF written without a projection g
 - **The Layers panel is grouped by pane**: one collapsible, pane-coloured group header per pane, listing that pane's layers in draw order. Every pane gets a header — **including empty ones**, so an empty pane stays visible as a drop target and can be closed from the panel
 - **Sync With** (unified master/slave): the gear menu links panes into a group — the invoker becomes the **master** (★), the others **slaves** (mirror icon); linked panes match the master's view and stay linked for pan/zoom, and a shared **ghost cursor** shows the pointer's geographic position in every synced pane. Un-sync (or closing a synced pane) dissolves the group; non-synced panes keep independent cameras
 - **Sync indication, colour-coded to the master**: the ★ / mirror badge is repeated wherever a pane is named — the pane chrome, each region's **stacking pill** (so a pane stacked behind another still declares its sync state) and each **pane group header in the Layers panel**, at the far right of the header band — and every badge in a group, the master's ★ included, is painted in the **master's pane colour**. Shape says *which role*, colour says *whose group*; a tooltip names the master in words ("Synced to «Pane 1»"), so the colour is never the only channel. Recolouring or renaming the master updates every badge live
-- **Per-pane pixel inspect**: in inspect mode, left-click reports the pane's representative/active raster, right-click all its visible rasters; results are grouped under a **collapsible drop-down per pane** (header coloured by the pane), and a shared **red highlight square** marks the sampled pixel in every synced pane
+- **Per-pane pixel inspect**: in inspect mode, left-click reports the pane's representative/active raster, right-click all its visible rasters; results are grouped under a **collapsible drop-down per pane** (header coloured by the pane), and a shared **red highlight square** marks the sampled pixel in every synced pane. The same selection also feeds the **Spectral Plot** panel, so the numbers in the table and the curves on the chart can never describe different layers
 
 ### GIS Overlays
 
@@ -123,8 +123,21 @@ to NetCDF/HDF5: a binary-raw import and a GeoTIFF written without a projection g
 
 ### Analysis and Plots
 
-- **Spectral Plot** (`S`): click pixels on the canvas to add multi-band spectra as colored line series; 10-color cycling palette
-- **Scan/Pixel Profile** (`P`): draw an ROI to compute aggregate statistics across scan rows or pixel columns
+- **Spectral Plot** (`Tools → Spectral Plot`, `S`): a **dockable panel** — dock it left, right or bottom, or leave it floating. It plots the multi-band spectrum of pixels picked in **Inspect mode**, and it holds one plot per *inspect selection* rather than one curve per click:
+  - The panel records **only while it is open**, and **closing it discards the plots** — they are a live working set, not a document. (The colour scheme is a preference and is remembered.)
+  - **Left-click** plots each target pane's topmost/active layer; **right-click** plots every visible raster — the same rule the Pixel Inspector follows, so the curves and the table always describe the same selection
+  - When panes are **synced**, the click covers the whole sync group and the spectra are **merged into one plot**, titled with the panes it spans
+  - **Activating a layer** in the Layers Panel brings up that layer's plot; every member of a merged plot brings up the merge. A layer never inspected shows a blank chart titled with its name
+  - A click **replaces** the curves by default; tick **Persist curves** to add them instead and compare several pixels. **Clear** discards the plot on screen
+  - Curves use a 10-color cycling palette; no-data bands are drawn as gaps
+- **Legend**: vertical, to the right of the plot, one entry per curve with **wrapping** text — the file name on one line, the coordinates on the next — so nothing is cut off. Each key shows the curve's **colour and its line style**, which is what separates two layers of the same pane. It scrolls when there are more curves than fit, and it is included in the saved PNG/SVG.
+- **Editing labels**: the ✎ beside a legend entry renames it, and the ✎ in the toolbar edits the plot title and both axis titles. A legend rename is remembered **per layer**, so it survives the next inspect click, and it replaces only the layer name — the coordinates stay, so two samples of one layer remain distinguishable. Clear a field to restore the automatic text (shown as grey placeholder while you edit). Edited labels appear in the PNG, SVG and CSV exports.
+- **Which pane is this curve from?** A curve's **hue is its pane's colour** — the same swatch as the pane pill and the Layers-panel band. A left-click, which plots one curve per pane, is drawn in that colour exactly; further curves of the same pane keep the hue and step through lightness, each with its own line style (solid / dashed / dotted / dash-dot), so layers within a pane stay distinguishable without relying on colour alone. Hue never varies within a pane — the pane palette's own hues are as little as 14° apart, so a visible hue spread would read as a *different* pane. If you would rather have maximum separation than pane meaning, the Spectral Plot's scheme selector switches to the **original fixed 10-hue palette**; the choice is remembered between sessions and the Profile follows it.
+- **Navigating and saving a plot** (both the Spectral Plot and the Scan/Pixel Profile carry the same row):
+  - Zoom with the ⊕ / ⊖ buttons or the mouse wheel; **left-drag anywhere in the plot to pan** — there is no pan mode to switch into; the ⌂ button returns to the auto-fitted range and is enabled only while you have moved away from it
+  - **Save** browses to a location and writes **PNG** or **SVG** (the plot exactly as displayed — zoom, pan, legend and theme) or **CSV** (the plotted numbers: one row per band and one column per curve for the Spectral Plot, one row per row/column index for the Profile; no-data cells are left empty)
+- **Scan/Pixel Profile** (`Tools → Scan/Pixel Profile`, `P`): a **dockable panel** like the Spectral Plot — dock it left, right or bottom, or leave it floating. Computes aggregate statistics across scan rows or pixel columns, with the curve drawn in the profiled layer's pane colour
+  - **Mask No-Data** (on by default) excludes the layer's no-data value and any non-finite samples from the statistics, so a scene padded with `-9999` is described by its data rather than its padding. A row or column left with nothing valid is drawn as a gap and exported as an empty cell — never as zero
   - Modes: Scan (row-wise) / Pixel (column-wise)
   - Statistics: Mean, Median, Standard Deviation, Quantile (configurable *p* in the range 0.0–1.0)
 - **Layer Info Panel**: file path, CRS, dimensions, band count, no-data value, and per-band statistics — long values (full path, full CRS WKT) word-wrap within the panel
@@ -193,8 +206,8 @@ to NetCDF/HDF5: a binary-raw import and a GeoTIFF written without a projection g
 | `Ctrl+U` | Open remote URL / COG |
 | `Space` | Fit camera to all loaded layers |
 | `Ctrl+M` | Raster Math expression editor |
-| `S` | Spectral Plot window |
-| `P` | Scan/Pixel Profile window |
+| `S` | Show the Spectral Plot panel |
+| `P` | Show the Scan/Pixel Profile panel |
 | `Ctrl+Shift+N` | Add new pane |
 | `Ctrl+Q` | Quit |
 | `Ctrl+click` | Pixel inspect (all bands at clicked location) |
