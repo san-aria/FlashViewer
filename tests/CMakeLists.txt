@@ -81,6 +81,11 @@ add_executable(flashviewer_tests
     "${CMAKE_SOURCE_DIR}/src/core/RasterLayer.cpp"
     "${CMAKE_SOURCE_DIR}/src/core/LayerManager.cpp"
     "${CMAKE_SOURCE_DIR}/src/panels/HistogramPanel.cpp"
+    # LayerPanel + its icon button: TC-LYR-18/19 drive the real panel widget, because the
+    # selection bookkeeping they pin lives in rebuildList, not in LayerGrouping's free
+    # functions.
+    "${CMAKE_SOURCE_DIR}/src/panels/LayerPanel.cpp"
+    "${CMAKE_SOURCE_DIR}/src/panels/SvgIconButton.cpp"
     "${CMAKE_SOURCE_DIR}/src/widgets/UiKit.cpp"
     "${CMAKE_SOURCE_DIR}/src/render/SyncGroup.cpp"
     "${CMAKE_SOURCE_DIR}/src/math/ExpressionEngine.cpp"

@@ -24,6 +24,10 @@ class Layer;
 class LayerTreeWidget : public QTreeWidget {
     Q_OBJECT
     int m_drag_src{-1};      // layer index being dragged (-1 = none)
+    // Whether the press that began the current click landed on a row. Read by
+    // selectionCommand to tell "slid off a row before letting go" (keep the selection) from
+    // "clicked the empty background" (clear it) — both arrive as a release on an invalid index.
+    bool m_press_on_row{false};
 public:
     explicit LayerTreeWidget(QWidget* parent = nullptr);
 
@@ -44,6 +48,22 @@ protected:
     // of its pane-coloured band. drawRow repaints that strip with the same band.
     void drawRow(QPainter* p, const QStyleOptionViewItem& opt,
                  const QModelIndex& index) const override;
+    // Guards the selection against a release that lands on no row. Drag is enabled here, so
+    // a press on an ALREADY-SELECTED row defers its selection command to the release (Qt's
+    // noSelectionOnMousePress, which is what lets a multi-selection be dragged). Qt then
+    // applies that command to whatever is under the pointer at release — and over empty
+    // space that is an invalid index, so ClearAndSelect drops the entire selection. Sliding
+    // the pointer off a label before letting go therefore deselected everything and greyed
+    // out the trash button.
+    QItemSelectionModel::SelectionFlags selectionCommand(
+        const QModelIndex& index, const QEvent* event = nullptr) const override;
+    void mousePressEvent(QMouseEvent* e) override;
+    // Swallows button-less moves. setItemWidget registers the subdataset combo as a
+    // PERSISTENT EDITOR for its row, and the view's move handling hands such a row to
+    // edit(), which focuses the editor — taking the selection down with it. A hover has no
+    // business reaching that machinery. Hover PAINTING is unaffected: it runs off
+    // QEvent::HoverMove in viewportEvent, not off mouse moves.
+    void mouseMoveEvent(QMouseEvent* e) override;
     void startDrag(Qt::DropActions actions) override;
     void dragEnterEvent(QDragEnterEvent* e) override;
     void dragMoveEvent(QDragMoveEvent* e) override;

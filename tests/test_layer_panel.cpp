@@ -174,3 +174,360 @@ TEST_CASE("fvPaneNeighbourIndex reorders a layer against its PANE siblings only"
     all[3] = nullptr;
     REQUIRE(fvPaneNeighbourIndex(all, 1, +1) == -1);  // the only sibling was the null entry
 }
+
+// --------------------------------------------------------------------------
+// Widget-level: a Shift/Ctrl multi-selection must survive the panel's own bookkeeping.
+// Two regressions, both of which only bit on Linux:
+//   • setCurrentItem() WITHOUT an explicit flag derives one from selectionCommand(index,
+//     /*event=*/nullptr), which falls back to QGuiApplication::keyboardModifiers(). Under
+//     ExtendedSelection that is Toggle while Ctrl is held and SelectCurrent under Shift —
+//     so the programmatic "follow the active layer" call undid the user's own click. The
+//     modifier state is live on X11 and stale on Windows, hence the platform split.
+//   • rebuildList() re-selected the pane headers as it built them and then wiped them with
+//     a ClearAndSelect from setCurrentItem, while the child rows kept their highlight role.
+
+#include "panels/LayerPanel.hpp"
+
+#include <QTreeWidget>
+#include <QItemSelectionModel>
+
+namespace {
+QTreeWidget* panelTree(LayerPanel& p) { return p.findChild<QTreeWidget*>("layerTree"); }
+
+// The panel casts to RasterLayer for the subdataset combo whenever type() is Raster, so the
+// widget-level stub must NOT claim to be one.
+class PanelStubLayer : public Layer {
+public:
+    LayerType type() const override { return LayerType::OSMBasemap; }
+};
+
+std::shared_ptr<Layer> makePanelLayer(uint64_t paneId, const QString& name) {
+    auto l = std::make_shared<PanelStubLayer>();
+    l->setPaneId(paneId);
+    l->setName(name);
+    return l;
+}
+} // namespace
+
+TEST_CASE("TC-LYR-18 setCurrentItem with NoUpdate leaves a multi-selection alone",
+          "[layerpanel][selection][TC-LYR-18]") {
+    // Pins the Qt contract the panel now depends on: NoUpdate is the ONLY flag that makes a
+    // programmatic current-row change modifier-proof.
+    QTreeWidget tree;
+    tree.setColumnCount(1);
+    tree.setSelectionMode(QAbstractItemView::ExtendedSelection);
+    for (int i = 0; i < 3; ++i) tree.addTopLevelItem(new QTreeWidgetItem({QString::number(i)}));
+
+    tree.topLevelItem(0)->setSelected(true);
+    tree.topLevelItem(2)->setSelected(true);
+    REQUIRE(tree.selectedItems().size() == 2);
+
+    tree.setCurrentItem(tree.topLevelItem(0), 0, QItemSelectionModel::NoUpdate);
+    CHECK(tree.selectedItems().size() == 2);
+    CHECK(tree.currentItem() == tree.topLevelItem(0));
+}
+
+TEST_CASE("TC-LYR-19 a rebuild preserves a mixed layer + pane-header selection",
+          "[layerpanel][selection][TC-LYR-19]") {
+    LayerManager mgr;
+    mgr.addLayer(makePanelLayer(1, "a"));    // index 0, pane 1
+    mgr.addLayer(makePanelLayer(1, "b"));    // index 1, pane 1
+    mgr.addLayer(makePanelLayer(2, "c"));    // index 2, pane 2
+
+    LayerPanel panel;
+    panel.setPaneListResolver([] {
+        return std::vector<std::pair<quint64, QString>>{{1, "Pane 1"}, {2, "Pane 2"}};
+    });
+    panel.setLayerManager(&mgr);
+
+    auto* tree = panelTree(panel);
+    REQUIRE(tree != nullptr);
+    REQUIRE(tree->topLevelItemCount() == 2);          // one group per pane
+
+    auto* pane2 = tree->topLevelItem(1);
+    auto* rowA  = tree->topLevelItem(0)->child(0);
+    auto* rowB  = tree->topLevelItem(0)->child(1);
+    REQUIRE(rowA != nullptr);
+    REQUIRE(rowB != nullptr);
+
+    // What a Ctrl-click sequence leaves behind: two layer rows of pane 1 plus pane 2's header.
+    tree->clearSelection();
+    rowA->setSelected(true);
+    rowB->setSelected(true);
+    pane2->setSelected(true);
+    REQUIRE(tree->selectedItems().size() == 3);
+
+    // Anything that re-groups the panel (a pane colour change, a sync-role change, a rename)
+    // funnels through rebuildList.
+    panel.refreshPanes();
+
+    REQUIRE(tree->topLevelItemCount() == 2);
+    CHECK(tree->topLevelItem(0)->child(0)->isSelected());
+    CHECK(tree->topLevelItem(0)->child(1)->isSelected());
+    CHECK(tree->topLevelItem(1)->isSelected());        // the header, previously dropped
+    CHECK(tree->selectedItems().size() == 3);
+}
+
+// TC-LYR-20 — a selected row must keep its pane band while the pointer is over it. The
+// theme's `QTreeWidget::item:hover` rule is an OPAQUE background-color, and the stylesheet
+// paints it inside QStyledItemDelegate::paint — after the delegate has laid down the band —
+// so hovering a Shift/Ctrl selection repainted the highlight away and the rows looked
+// deselected. Pixels, not state: the selection model was never wrong, only the painting.
+#include <QFile>
+#include <QHoverEvent>
+#include <QImage>
+#include <QApplication>
+
+namespace {
+// Deliver a hover to the viewport and repaint. Sent directly rather than via a synthetic
+// mouse move: QWidget only forwards hover events when WA_Hover is set, but
+// QAbstractItemView::viewportEvent updates its hovered index from the event either way.
+void hoverRow(QTreeWidget* tree, const QPoint& pos) {
+    QHoverEvent ev(QEvent::HoverMove, QPointF(pos), QPointF(-1, -1));
+    QApplication::sendEvent(tree->viewport(), &ev);
+}
+
+QImage rowPixels(QTreeWidget* tree, QTreeWidgetItem* item) {
+    const QRect r = tree->visualItemRect(item);
+    return tree->viewport()->grab(r).toImage();
+}
+} // namespace
+
+TEST_CASE("TC-LYR-20 hover does not repaint a selected row's highlight away",
+          "[layerpanel][selection][theme][TC-LYR-20]") {
+    QFile qss(QStringLiteral(FV_SOURCE_DIR "/resources/themes/dark.qss"));
+    REQUIRE(qss.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString theme = QString::fromUtf8(qss.readAll());
+    REQUIRE(theme.contains(QStringLiteral("::item:hover")));   // the rule under test
+
+    LayerManager mgr;
+    mgr.addLayer(makePanelLayer(1, "a"));
+    mgr.addLayer(makePanelLayer(1, "b"));
+
+    LayerPanel panel;
+    panel.setPaneListResolver([] {
+        return std::vector<std::pair<quint64, QString>>{{1, "Pane 1"}};
+    });
+    panel.setPaneColorResolver([](uint64_t) { return QColor(0, 120, 255); });
+    panel.setLayerManager(&mgr);
+    panel.setStyleSheet(theme);
+    panel.resize(320, 240);
+    panel.show();
+
+    auto* tree = panelTree(panel);
+    REQUIRE(tree != nullptr);
+    auto* rowA = tree->topLevelItem(0)->child(0);
+    auto* rowB = tree->topLevelItem(0)->child(1);
+    REQUIRE(rowA != nullptr);
+    REQUIRE(rowB != nullptr);
+
+    tree->clearSelection();
+    rowA->setSelected(true);
+    REQUIRE(rowA->isSelected());
+    REQUIRE_FALSE(rowB->isSelected());
+
+    const QRect rectA = tree->visualItemRect(rowA);
+    const QRect rectB = tree->visualItemRect(rowB);
+    REQUIRE(rectA.isValid());
+    REQUIRE(rectB.isValid());
+
+    // Baseline with the pointer parked off both rows.
+    hoverRow(tree, QPoint(rectA.center().x(), tree->viewport()->height() - 1));
+    const QImage selectedIdle = rowPixels(tree, rowA);
+    const QImage plainIdle    = rowPixels(tree, rowB);
+
+    // Control: an UNSELECTED row still takes the theme's hover. This also proves the hover
+    // event reaches the view — without it the assertion below would pass vacuously.
+    hoverRow(tree, rectB.center());
+    CHECK(rowPixels(tree, rowB) != plainIdle);
+
+    // The regression: hovering the SELECTED row must not change a single pixel of it.
+    hoverRow(tree, rectA.center());
+    CHECK(rowPixels(tree, rowA) == selectedIdle);
+    CHECK(rowA->isSelected());
+}
+
+// TC-LYR-21 — a selection must survive letting go of the button away from the row. The tree
+// enables drag, so Qt defers a press on an ALREADY-SELECTED row to the release
+// (noSelectionOnMousePress — what makes a multi-selection draggable) and then applies that
+// command to whatever sits under the pointer at release. Over empty space that index is
+// invalid, so ClearAndSelect dropped the whole selection: the pane band went flat and the
+// trash button greyed out, which read as "hover deselects".
+#include <QMouseEvent>
+#include <QAbstractButton>
+
+namespace {
+void sendMouse(QTreeWidget* tree, QEvent::Type type, const QPoint& p, Qt::MouseButton btn,
+               Qt::MouseButtons held) {
+    QMouseEvent ev(type, QPointF(p), tree->viewport()->mapToGlobal(QPointF(p)),
+                   btn, held, Qt::NoModifier);
+    QApplication::sendEvent(tree->viewport(), &ev);
+}
+void clickAt(QTreeWidget* tree, const QPoint& p) {
+    sendMouse(tree, QEvent::MouseButtonPress,   p, Qt::LeftButton, Qt::LeftButton);
+    sendMouse(tree, QEvent::MouseButtonRelease, p, Qt::LeftButton, Qt::NoButton);
+}
+// Press on `from`, slide off to `to` with the button down, let go there.
+void pressDragRelease(QTreeWidget* tree, const QPoint& from, const QPoint& to) {
+    sendMouse(tree, QEvent::MouseButtonPress,   from, Qt::LeftButton, Qt::LeftButton);
+    sendMouse(tree, QEvent::MouseMove,          to,   Qt::NoButton,   Qt::LeftButton);
+    sendMouse(tree, QEvent::MouseButtonRelease, to,   Qt::LeftButton, Qt::NoButton);
+}
+QAbstractButton* trashButton(LayerPanel& panel) {
+    for (auto* b : panel.findChildren<QAbstractButton*>())
+        if (b->toolTip().contains(QStringLiteral("Remove the selected"))) return b;
+    return nullptr;
+}
+} // namespace
+
+TEST_CASE("TC-LYR-21 releasing away from a row keeps the selection and the trash button",
+          "[layerpanel][selection][TC-LYR-21]") {
+    LayerManager mgr;
+    mgr.addLayer(makePanelLayer(1, "a"));
+    mgr.addLayer(makePanelLayer(1, "b"));
+
+    LayerPanel panel;
+    panel.setPaneListResolver([] {
+        return std::vector<std::pair<quint64, QString>>{{1, "Pane 1"}, {2, "Pane 2"}};
+    });
+    panel.setPaneColorResolver([](uint64_t) { return QColor(0, 120, 255); });
+    panel.setLayerManager(&mgr);
+    panel.resize(320, 260);
+    panel.show();
+
+    auto* tree  = panelTree(panel);
+    auto* trash = trashButton(panel);
+    REQUIRE(tree != nullptr);
+    REQUIRE(trash != nullptr);
+
+    auto* rowA  = tree->topLevelItem(0)->child(0);
+    auto* rowB  = tree->topLevelItem(0)->child(1);
+    auto* pane2 = tree->topLevelItem(1);
+    REQUIRE(rowA != nullptr);
+    REQUIRE(rowB != nullptr);
+    REQUIRE(pane2 != nullptr);
+
+    // Somewhere inside the viewport with no row under it.
+    const QPoint empty(5, tree->viewport()->height() - 2);
+    REQUIRE_FALSE(tree->indexAt(empty).isValid());
+
+    SECTION("pane header: press, slide off, release") {
+        clickAt(tree, tree->visualItemRect(pane2).center());
+        REQUIRE(pane2->isSelected());
+        REQUIRE(trash->isEnabled());
+
+        pressDragRelease(tree, tree->visualItemRect(pane2).center(), empty);
+        CHECK(pane2->isSelected());
+        CHECK(trash->isEnabled());
+    }
+
+    SECTION("layer row: press, slide off, release") {
+        clickAt(tree, tree->visualItemRect(rowA).center());
+        REQUIRE(rowA->isSelected());
+
+        pressDragRelease(tree, tree->visualItemRect(rowA).center(), empty);
+        CHECK(rowA->isSelected());
+        CHECK(trash->isEnabled());
+    }
+
+    SECTION("a multi-selection survives the same gesture") {
+        clickAt(tree, tree->visualItemRect(rowA).center());
+        rowB->setSelected(true);
+        pane2->setSelected(true);
+        REQUIRE(tree->selectedItems().size() == 3);
+
+        pressDragRelease(tree, tree->visualItemRect(rowB).center(), empty);
+        CHECK(tree->selectedItems().size() == 3);
+        CHECK(trash->isEnabled());
+    }
+
+    SECTION("pressing the empty background still deselects") {
+        // The conventional gesture is preserved: only the DEFERRED release command is
+        // intercepted, never a press that genuinely lands on the background.
+        clickAt(tree, tree->visualItemRect(rowA).center());
+        REQUIRE(rowA->isSelected());
+
+        clickAt(tree, empty);
+        CHECK_FALSE(rowA->isSelected());
+        CHECK_FALSE(trash->isEnabled());
+    }
+}
+
+#include "io/DatasetFactory.hpp"
+#include "core/RasterLayer.hpp"
+#include "fixtures/FixtureFactory.hpp"
+#include <QComboBox>
+
+// TC-LYR-17 — moving the pointer over the subdataset (NetCDF variable) picker must not
+// disturb the selection. setItemWidget registers that combo as a PERSISTENT EDITOR for its
+// row, so the view's mouse-move handling handed the row to edit(), which focuses the editor
+// and took the selection with it: hovering the drop-down cleared every selected pane and
+// layer and greyed out the trash button, with no click and no scroll. Note this reproduces
+// only with the theme applied and a real multi-variable dataset, which is why the earlier
+// hover tests missed it.
+TEST_CASE("TC-LYR-17 hovering the variable picker leaves the selection alone",
+          "[layerpanel][subdataset][selection][TC-LYR-17]") {
+    FixtureFactory ff;
+    auto fx = ff.netcdfMultiVar(8, 8);
+    if (fx.path.empty()) SKIP("GDAL netCDF driver unavailable");
+    auto subs = DatasetFactory::listSubdatasets(fx.path);
+    REQUIRE(subs.size() >= 2);
+    auto ds0 = DatasetFactory::openSubdataset(subs[0].first);
+    REQUIRE(ds0 != nullptr);
+
+    auto layer = std::make_shared<RasterLayer>(ds0);
+    layer->initSubdatasetMeta(fx.path, subs, 0);
+    layer->setPaneId(1);
+
+    LayerManager mgr;
+    mgr.addLayer(layer);
+    mgr.addLayer(makePanelLayer(1, "plain"));
+
+    QFile qss(QStringLiteral(FV_SOURCE_DIR "/resources/themes/dark.qss"));
+    REQUIRE(qss.open(QIODevice::ReadOnly | QIODevice::Text));
+
+    LayerPanel panel;
+    panel.setPaneListResolver([] {
+        return std::vector<std::pair<quint64, QString>>{{1, "Pane 1"}, {2, "Pane 2"}};
+    });
+    panel.setPaneColorResolver([](uint64_t) { return QColor(0, 120, 255); });
+    panel.setLayerManager(&mgr);
+    panel.setStyleSheet(QString::fromUtf8(qss.readAll()));
+    panel.resize(340, 300);
+    panel.show();
+
+    auto* tree  = panelTree(panel);
+    auto* trash = trashButton(panel);
+    REQUIRE(tree != nullptr);
+    REQUIRE(trash != nullptr);
+    auto* combo = tree->findChild<QComboBox*>();
+    REQUIRE(combo != nullptr);
+
+    // The panel reports its selection to MainWindow through this signal; a spurious 0/0 is
+    // what blanked the property panels as well as the trash button.
+    int lastLayers = -1, lastPanes = -1;
+    QObject::connect(&panel, &LayerPanel::selectionSummaryChanged,
+                     [&](int l, int p) { lastLayers = l; lastPanes = p; });
+
+    clickAt(tree, tree->visualItemRect(tree->topLevelItem(0)->child(0)).center());
+    tree->topLevelItem(1)->setSelected(true);      // a pane header joins the selection
+    QApplication::processEvents();
+    REQUIRE(tree->selectedItems().size() == 2);
+    REQUIRE(trash->isEnabled());
+
+    // A hover is a move with NO button held, delivered to the viewport at the combo's row.
+    const QPoint overCombo = tree->viewport()->mapFrom(combo->parentWidget(),
+                                                       combo->geometry().center());
+    REQUIRE(tree->indexAt(overCombo).isValid());
+    QMouseEvent hover(QEvent::MouseMove, QPointF(overCombo),
+                      tree->viewport()->mapToGlobal(QPointF(overCombo)),
+                      Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(tree->viewport(), &hover);
+    QApplication::processEvents();
+
+    CHECK(tree->selectedItems().size() == 2);
+    CHECK(trash->isEnabled());
+    CHECK(lastLayers == 1);                 // never re-announced as 0/0
+    CHECK(lastPanes == 1);
+    CHECK_FALSE(combo->hasFocus());         // the editor must not steal focus on a hover
+}

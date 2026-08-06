@@ -28,6 +28,7 @@
 #include <QPainter>
 #include <QItemSelectionModel>
 #include <algorithm>
+#include <utility>                    // std::as_const (QSet iteration without a detach)
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QMimeData>
@@ -117,10 +118,31 @@ public:
         // ONE painting path for headers and layer rows alike, so the highlight is uniform:
         // fill with the shared pane band, suppress the style's blue selection panel, then
         // let the base draw text/decorations over it.
+        //
+        // A SELECTED row is first flooded with the view's own background. The band is
+        // translucent by design, and QTreeView::drawRow has already painted the row panel
+        // underneath — including the theme's opaque `::item:hover` fill, which it derives
+        // from its OWN hovered index, so no edit to the option we are handed can suppress
+        // it. Compositing the band over hover lightened it towards the idle alpha, and the
+        // row read as deselected for as long as the pointer sat on it. Flooding first makes
+        // the selected band's colour independent of whatever was drawn below, exactly as
+        // LayerTreeWidget::drawRow already does for the branch gutter. Unselected rows are
+        // left alone, so they keep the theme's hover feedback.
+        if (selected) {
+            const auto* view = qobject_cast<const QAbstractItemView*>(opt.widget);
+            p->fillRect(opt.rect, view ? view->viewport()->palette().color(QPalette::Base)
+                                       : opt.palette.color(QPalette::Base));
+        }
         p->fillRect(opt.rect, fvRowBand(index, opt.palette, selected));
 
         QStyleOptionViewItem o(opt);
         o.state &= ~QStyle::State_Selected;     // the band above already conveys selection
+        // Hover has to go the same way on a selected row. The theme's
+        // `QTreeWidget::item:hover` rule is an OPAQUE background-color, and the stylesheet
+        // fills the item rect with it before the text is drawn — repainting the pane band
+        // away, so a Shift/Ctrl selection looked like it dropped every row the pointer
+        // crossed. Unselected rows keep the theme's hover feedback.
+        if (selected) o.state &= ~QStyle::State_MouseOver;
         o.backgroundBrush = Qt::NoBrush;
         if (boldName) o.font.setBold(true);     // header label / active layer name
         // Row TEXT keeps the theme's normal foreground (user decision): the pane-coloured
@@ -161,7 +183,13 @@ LayerTreeWidget::LayerTreeWidget(QWidget* parent) : QTreeWidget(parent) {}
 
 void LayerTreeWidget::drawRow(QPainter* p, const QStyleOptionViewItem& opt,
                              const QModelIndex& index) const {
+    // NOTE: hover cannot be suppressed by editing the option passed here — QTreeView::drawRow
+    // re-derives State_MouseOver from its own hovered index. The selected row's band is made
+    // immune to it in PaneColorDelegate::paint instead, by flooding the cell first.
     QTreeWidget::drawRow(p, opt, index);
+
+    const bool selected = (selectionModel() && selectionModel()->isSelected(index))
+                          || index.siblingAtColumn(kColName).data(kPaneSelRole).toBool();
 
     // The branch/indent gutter is drawn by QTreeView with the style's row panel (the theme's
     // blue selection), and the item delegate never sees it — a SELECTED pane therefore showed
@@ -169,8 +197,6 @@ void LayerTreeWidget::drawRow(QPainter* p, const QStyleOptionViewItem& opt,
     // (opaquely, since the style has already painted underneath), then put the expander back
     // on top. Only selected rows are touched: an idle row's expander area stays plain
     // background, so the drop-down arrow is never tinted until the row is actually picked.
-    const bool selected = (selectionModel() && selectionModel()->isSelected(index))
-                          || index.siblingAtColumn(kColName).data(kPaneSelRole).toBool();
     if (!selected) return;
 
     int depth = 0;
@@ -186,6 +212,31 @@ void LayerTreeWidget::drawRow(QPainter* p, const QStyleOptionViewItem& opt,
     p->fillRect(gutter, fvRowBand(index, palette(), /*selected=*/true));
     p->restore();
     drawBranches(p, gutter, index);
+}
+
+void LayerTreeWidget::mousePressEvent(QMouseEvent* e) {
+    m_press_on_row = indexAt(e->position().toPoint()).isValid();
+    QTreeWidget::mousePressEvent(e);
+}
+
+void LayerTreeWidget::mouseMoveEvent(QMouseEvent* e) {
+    // Hover: nothing here may act on it. Drag-and-drop, rubber-band selection and
+    // auto-scroll all arrive with a button held, so they still reach the base class.
+    if (e->buttons() == Qt::NoButton) { e->ignore(); return; }
+    QTreeWidget::mouseMoveEvent(e);
+}
+
+QItemSelectionModel::SelectionFlags LayerTreeWidget::selectionCommand(
+    const QModelIndex& index, const QEvent* event) const {
+    // Both gestures reach here as a release on an INVALID index, so the press decides which
+    // one it was. Pressing the empty background still clears the selection — the conventional
+    // "click away to deselect". Pressing a row and letting go once the pointer has slid off
+    // it must not, which is the case Qt would otherwise resolve as ClearAndSelect(nothing).
+    if (event && event->type() == QEvent::MouseButtonRelease
+        && !index.isValid() && m_press_on_row)
+        return QItemSelectionModel::NoUpdate;
+
+    return QTreeWidget::selectionCommand(index, event);
 }
 
 void LayerTreeWidget::startDrag(Qt::DropActions actions) {
@@ -388,11 +439,23 @@ void LayerPanel::setLayerManager(LayerManager* mgr) {
         if (m_updating || m_selecting || !m_mgr) return;
         m_updating = true;   // suppress onSelectionChanged → setActiveLayer feedback
         if (auto* it = itemForIndex(idx)) {
-            // If the row is already part of the selection, only move the current index —
-            // the default ClearAndSelect would discard every other selected row.
-            if (it->isSelected()) m_tree->setCurrentItem(it, kColName, QItemSelectionModel::NoUpdate);
-            else                  m_tree->setCurrentItem(it);
-        } else { m_tree->clearSelection(); m_tree->setCurrentItem(nullptr); }
+            // NoUpdate on BOTH paths, with the selection change spelled out separately.
+            // setCurrentItem() without a flag resolves one through selectionCommand(index,
+            // /*event=*/nullptr), which — having no event to read — falls back to
+            // QGuiApplication::keyboardModifiers(). Under ExtendedSelection that is Toggle
+            // while Ctrl is held and SelectCurrent while Shift is held, NOT the intended
+            // ClearAndSelect: a Ctrl-click that lands here toggled its own row straight back
+            // off. The live modifier state is accurate on X11 and stale on Windows, which is
+            // why multi-select only fell apart on Linux.
+            if (!it->isSelected()) {
+                m_tree->clearSelection();
+                it->setSelected(true);
+            }
+            m_tree->setCurrentItem(it, kColName, QItemSelectionModel::NoUpdate);
+        } else {
+            m_tree->clearSelection();
+            m_tree->setCurrentItem(nullptr, kColName, QItemSelectionModel::NoUpdate);
+        }
         // Keep the bold-active-name role (#3) in sync with the active layer.
         for (int g = 0; g < m_tree->topLevelItemCount(); ++g) {
             auto* grp = m_tree->topLevelItem(g);
@@ -632,13 +695,24 @@ void LayerPanel::rebuildList() {
         }
     }
 
-    // Restore active selection
+    // Restore the current row, then the selection — in that order and never the other way
+    // round. NoUpdate keeps setCurrentItem() from issuing a selection command of its own:
+    // without a flag it derives one from QGuiApplication::keyboardModifiers() (Toggle under
+    // Ctrl, SelectCurrent under Shift, ClearAndSelect otherwise), so a rebuild landing while
+    // the user holds a modifier rewrote the very selection this block exists to preserve.
     if (m_mgr->count() > 0) {
         const int ai = m_mgr->activeIndex();
-        if (auto* it = itemForIndex(ai)) m_tree->setCurrentItem(it);
+        if (auto* it = itemForIndex(ai))
+            m_tree->setCurrentItem(it, kColName, QItemSelectionModel::NoUpdate);
     }
     for (int i : selected)
         if (auto* it = itemForIndex(i)) it->setSelected(true);
+    // Pane headers too. They were selected as they were built above, but a ClearAndSelect
+    // from setCurrentItem used to wipe them here while the child rows kept kPaneSelRole —
+    // the rows stayed highlighted, selectedPaneIds() went empty, and the trash button then
+    // acted on a different set than the panel was showing.
+    for (quint64 pid : std::as_const(selectedPanes))
+        if (auto* grp = groupItemFor(pid)) grp->setSelected(true);
 
     m_tree->setUpdatesEnabled(true);
     m_updating = false;
