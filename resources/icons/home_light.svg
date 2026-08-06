@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+<!-- Shape after Lucide (https://lucide.dev), ISC licence: the 24-unit original scaled by
+     2/3 onto the project's 16-unit icon grid, restroked at 1.2 — identical weight to the
+     pane-chrome icons. -->
+  <g fill="none" stroke="#1f2328" stroke-width="1.2"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="m2 6 6-4.67 6 4.67 v7.33 a1.33 1.33 0 0 1 -1.33 1.33 H3.33 a1.33 1.33 0 0 1 -1.33 -1.33 z"/>
+    <path d="M6 14.67 V8 h4 v6.67"/>
+  </g>
+</svg>
