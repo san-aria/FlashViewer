@@ -1,4 +1,4 @@
-#include "panels/SvgIconButton.hpp"
+#include "widgets/SvgIconButton.hpp"
 
 #include <QPainter>
 #include <QImage>

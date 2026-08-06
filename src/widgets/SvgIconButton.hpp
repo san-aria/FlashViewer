@@ -6,6 +6,11 @@
 // QToolButton that renders an SVG icon via QSvgRenderer and paints a
 // translucent hover/press tint using CompositionMode_SourceAtop.
 // QSS :hover is deliberately not relied upon; state is tracked internally.
+//
+// Lives in widgets/ because it is used by all three layers that need an icon button — the
+// Layers panel, the pane chrome, and the shared chart toolbar. It sat in panels/ until
+// ChartTools became a third caller, which left widgets/ (the shared primitives) depending
+// on panels/ (a consumer of them).
 class SvgIconButton : public QToolButton {
     Q_OBJECT
 public:

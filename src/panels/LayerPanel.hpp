@@ -4,7 +4,7 @@
 #include <QDropEvent>
 #include <QEvent>
 #include <QColor>
-#include "panels/SvgIconButton.hpp"
+#include "widgets/SvgIconButton.hpp"
 #include "widgets/UiKit.hpp"   // FvPaneSyncInfo (pane-header sync badge)
 #include <cstdint>
 #include <functional>

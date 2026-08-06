@@ -85,7 +85,7 @@ add_executable(flashviewer_tests
     # selection bookkeeping they pin lives in rebuildList, not in LayerGrouping's free
     # functions.
     "${CMAKE_SOURCE_DIR}/src/panels/LayerPanel.cpp"
-    "${CMAKE_SOURCE_DIR}/src/panels/SvgIconButton.cpp"
+    "${CMAKE_SOURCE_DIR}/src/widgets/SvgIconButton.cpp"
     "${CMAKE_SOURCE_DIR}/src/widgets/UiKit.cpp"
     "${CMAKE_SOURCE_DIR}/src/render/SyncGroup.cpp"
     "${CMAKE_SOURCE_DIR}/src/math/ExpressionEngine.cpp"

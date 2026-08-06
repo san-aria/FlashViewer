@@ -1,5 +1,5 @@
 #include "render/PaneChrome.hpp"
-#include "panels/SvgIconButton.hpp"
+#include "widgets/SvgIconButton.hpp"
 
 #include <QLabel>
 #include <QHBoxLayout>
