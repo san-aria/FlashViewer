@@ -115,7 +115,7 @@ void maskPlane(std::vector<double>& a, FvCoordAxis axis, bool geographic,
         }
     }
 
-    // Longitude in the 0..360 convention → −180..180, so both conventions georeference
+    // Longitude in the [0, 360) convention → [−180, 180], so both conventions georeference
     // identically. Applied only when NO surviving sample is negative; a mixed-sign array is
     // already signed and shifting it would tear the swath in half.
     if (geographic && axis == FvCoordAxis::X) {
@@ -262,8 +262,8 @@ std::string fvCoordMaskSummary(const FvCoordProbe& x, const FvCoordProbe& y) {
     }
     if (x.normalized_lon) {
         if (!s.empty()) s += " ";
-        s += "Longitudes were given in the 0..360 convention and have been normalised "
-             "to -180..180.";
+        s += "Longitudes were given in the [0, 360) convention and have been normalised "
+             "to [-180, 180].";
     }
     return s;
 }

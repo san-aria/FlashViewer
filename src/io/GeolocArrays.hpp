@@ -34,7 +34,7 @@
 enum class FvCoordAxis { X, Y };
 
 // Geographic convention limits (FR-IO-15). Latitude is hard-bounded; longitude accepts
-// BOTH the −180..180 and the 0..360 conventions and is normalised to −180..180 after
+// BOTH the [−180, 180] and the [0, 360) conventions and is normalised to [−180, 180] after
 // masking, so either form georeferences identically.
 inline constexpr double kFvLatAbsMax = 90.0;
 inline constexpr double kFvLonAbsMax = 360.0;
@@ -58,7 +58,7 @@ struct FvCoordProbe {
                                        // convention — i.e. finite, not the declared no-data,
                                        // and still outside ±90 / ±360. This is what raises
                                        // the dialog's warning strip.
-    bool        normalized_lon{false}; // 0..360 longitudes were shifted to −180..180
+    bool        normalized_lon{false}; // [0, 360) longitudes were shifted to [−180, 180]
 
     double      vmin{0.0};          // over the SURVIVING samples (post-normalisation)
     double      vmax{0.0};

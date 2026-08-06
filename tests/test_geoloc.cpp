@@ -74,9 +74,12 @@ TEST_CASE("TC-IO-17 out-of-convention and fill samples are masked out",
     CHECK_THAT(msg, ContainsSubstring("convention"));
 }
 
-// TC-IO-18 — longitudes in the 0..360 convention are normalised to −180..180 rather than
+// TC-IO-18 — longitudes in the [0, 360) convention are normalised to [−180, 180] rather than
 // masked, so either convention georeferences identically.
-TEST_CASE("TC-IO-18 0..360 longitudes are normalised, not rejected", "[io][geoloc]") {
+// The name deliberately avoids the interval's square brackets: Catch2 reads `[...]` in a test
+// NAME as a tag, and `catch_discover_tests` then folds every case after this one into a single
+// mis-parsed CTest entry (seen on Catch2 3.4.0). The notation lives in the assertions instead.
+TEST_CASE("TC-IO-18 unsigned 0-360 longitudes are normalised, not rejected", "[io][geoloc]") {
     FixtureFactory ff;
     // 200° … 207.5°, entirely east of 180 and never negative → the normalisation case.
     auto ax = ff.coordAxis1D(16, /*vertical=*/false, /*origin=*/200.0, /*step=*/0.5);
@@ -88,7 +91,11 @@ TEST_CASE("TC-IO-18 0..360 longitudes are normalised, not rejected", "[io][geolo
     CHECK(p.vmin >= -180.0);
     CHECK(p.vmax <= 180.0);
     CHECK_THAT(p.vmin, WithinAbs(-160.0, 1e-4));   // 200 − 360
-    CHECK_THAT(fvCoordMaskSummary(p, p), ContainsSubstring("0..360"));
+    // The warning strip states the intervals in interval notation — half-open on the
+    // 0–360 side, closed on the signed side, matching what the shift above implements.
+    const std::string summary = fvCoordMaskSummary(p, p);
+    CHECK_THAT(summary, ContainsSubstring("[0, 360)"));
+    CHECK_THAT(summary, ContainsSubstring("[-180, 180]"));
 }
 
 // A mixed-sign longitude array is ALREADY signed; shifting it would tear the swath in
