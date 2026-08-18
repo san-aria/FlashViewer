@@ -6,6 +6,7 @@
 #include "gis/ScaleBar.hpp"
 #include "gis/GeoScale.hpp"
 #include "gis/CrsUtil.hpp"
+#include "gis/GeoMeasurement.hpp"
 #include "gis/WarpResampling.hpp"
 #include "core/RasterLayer.hpp"
 #include "core/VectorLayer.hpp"
@@ -535,6 +536,14 @@ void MapCanvas::paintGL() {
         }
     }
 
+    // Pixel highlight overlay: rendered synchronously with exact camera matrix in this pass
+    if (m_highlight_active) {
+        drawPixelHighlight();
+    }
+
+    // Measurement overlay (Distance and Area tools)
+    drawMeasurementOverlay();
+
     // Frame timer (NFR-PERF-1): record this frame's render cost, then draw the HUD
     // (FR-APP-14) last so its own paint isn't included in the measured frame time.
     const double frame_ms = std::chrono::duration<double, std::milli>(
@@ -907,59 +916,71 @@ void MapCanvas::fitToLayers() {
 // --------------------------------------------------------------------------
 // Mouse events
 
-void MapCanvas::setInspectMode(bool on) {
-    if (m_inspect_mode == on) return;
-    m_inspect_mode = on;
-    setCursor(on ? Qt::CrossCursor : Qt::ArrowCursor);
-    if (!on && m_highlight_overlay)
-        m_highlight_overlay->clearHighlight();
-    emit inspectModeChanged(on);
+void MapCanvas::setToolMode(ToolMode mode) {
+    if (m_tool_mode == mode) return;
+    m_tool_mode = mode;
+
+    if (mode == ToolMode::Inspect) {
+        setCursor(Qt::CrossCursor);
+    } else if (mode == ToolMode::MeasureDistance || mode == ToolMode::MeasureArea) {
+        setCursor(Qt::CrossCursor);
+        clearMeasurement();
+    } else {
+        setCursor(Qt::ArrowCursor);
+        clearMeasurement();
+        clearInspectHighlight();
+    }
+
+    emit inspectModeChanged(mode == ToolMode::Inspect);
+    emit toolModeChanged(m_tool_mode);
+    update();
+}
+
+void MapCanvas::clearMeasurement() {
+    m_measure_points.clear();
+    m_measure_has_cursor = false;
+    m_measure_finished = false;
+    emit measurementUpdated(0.0, 0.0, QString{});
+    update();
 }
 
 void MapCanvas::clearInspectHighlight() {
+    if (m_highlight_active) {
+        m_highlight_active = false;
+        update();
+    }
     if (m_highlight_overlay) m_highlight_overlay->clearHighlight();
 }
 
 void MapCanvas::updateHighlightForGeo(double geo_x, double geo_y) {
-    if (!m_highlight_overlay) return;
     // Representative raster: the active-in-pane layer if it is a raster, else the first raster
     // this pane shows (mirrors paneIsGeographic / the inspector's representative-layer pick, so
     // a synced sibling snaps the click to its own dataset — Phase 6.8.3).
     std::shared_ptr<Layer> rep = activeLayerInPane();
-    if (!rep || rep->type() != LayerType::Raster) {
+    if (!rep || rep->type() != LayerType::Raster || !rep->visible()) {
         for (const auto& l : paneLayers())
-            if (l && l->type() == LayerType::Raster) { rep = l; break; }
+            if (l && l->type() == LayerType::Raster && l->visible()) { rep = l; break; }
     }
-    if (!rep || rep->type() != LayerType::Raster) {
-        m_highlight_overlay->clearHighlight();
+    if (!rep || rep->type() != LayerType::Raster || !rep->visible()) {
+        clearInspectHighlight();
         return;
     }
     auto* rl = static_cast<RasterLayer*>(rep.get());
     auto* ds = rl->dataset();
-    if (!ds) { m_highlight_overlay->clearHighlight(); return; }
+    if (!ds) { clearInspectHighlight(); return; }
 
-    // Snap the highlight to the WARPED DISPLAY CELL under the cursor (ESRI/ImageLinker style):
-    // the visible pixel-blocks are cells of the warped VRT grid, so outlining that cell frames
-    // exactly what the user sees — the source-pixel polygon (QGIS-style) floated because
-    // FlashViewer warps to a fixed-resolution grid distinct from the source pixels. The warp
-    // uses nearest-neighbour for categorical data (fvDefaultResampling) so displayed values are
-    // unaltered, and the inspected VALUE is still read from the source pixel (FR-CRS-4). The
-    // warped grid is north-up in the Project CRS, so the cell is an axis-aligned rectangle; with
-    // no reprojection the view is sameAsSource (gt == source), degenerating to the source pixel.
     const std::string resamp =
         fvDefaultResampling(static_cast<GDALDataType>(ds->bandDataType(1)),
                             ds->bandHasColorTable(1));
     RasterDataset::WarpedView wv = ds->warpedView(m_project_wkt, resamp);
-    if (wv.failed) { m_highlight_overlay->clearHighlight(); return; }
+    if (wv.failed) { clearInspectHighlight(); return; }
 
     // The click is already in the pane Project CRS → locate the warped cell directly.
-    // geoToPixel is pixel-CENTRE based (integer == centre), so the containing cell index is
-    // round(), not floor().
     auto px = wv.gt.geoToPixel(geo_x, geo_y);
-    int col = static_cast<int>(std::round(px.x));
-    int row = static_cast<int>(std::round(px.y));
+    int col = static_cast<int>(std::floor(px.x + 0.5));
+    int row = static_cast<int>(std::floor(px.y + 0.5));
     if (col < 0 || row < 0 || col >= wv.width || row >= wv.height) {
-        m_highlight_overlay->clearHighlight();
+        clearInspectHighlight();
         return;
     }
     // Cell corners are the raw affine EDGES (pixelToGeo would return cell centres, offsetting the
@@ -973,7 +994,251 @@ void MapCanvas::updateHighlightForGeo(double geo_x, double geo_y) {
                                     cornerGeo(col + 1, row),      // TR
                                     cornerGeo(col + 1, row + 1),  // BR
                                     cornerGeo(col, row + 1) };    // BL
-    m_highlight_overlay->setHighlight(corners, &m_camera);
+
+    m_highlight_corners = corners;
+    m_highlight_active = true;
+    update();
+}
+
+void MapCanvas::drawPixelHighlight() {
+    if (!m_highlight_active) return;
+
+    QPolygonF poly;
+    poly.reserve(4);
+    double minx = 0, miny = 0, maxx = 0, maxy = 0;
+    double sumX = 0.0, sumY = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        auto s = m_camera.geoToScreen(m_highlight_corners[i].x(), m_highlight_corners[i].y());
+        if (i == 0) { minx = maxx = s.x; miny = maxy = s.y; }
+        else {
+            minx = std::min(minx, s.x); maxx = std::max(maxx, s.x);
+            miny = std::min(miny, s.y); maxy = std::max(maxy, s.y);
+        }
+        sumX += s.x;
+        sumY += s.y;
+        poly << QPointF(s.x, s.y);
+    }
+
+    const double cx = sumX / 4.0;
+    const double cy = sumY / 4.0;
+
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    const double boxW = maxx - minx;
+    const double boxH = maxy - miny;
+
+    // Outline cell boundaries when pixel is large enough on screen
+    if (boxW >= 3.0 && boxH >= 3.0) {
+        p.setPen(QPen(QColor(230, 20, 20, 230), 2.0));
+        p.setBrush(QColor(255, 0, 0, 35));
+        p.drawPolygon(poly);
+    }
+
+    // Contrast halo / shadow (white outer stroke)
+    p.setPen(QPen(QColor(255, 255, 255, 220), 3.0, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(QPointF(cx - 6.0, cy), QPointF(cx + 6.0, cy));
+    p.drawLine(QPointF(cx, cy - 6.0), QPointF(cx, cy + 6.0));
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(QPointF(cx, cy), 3.5, 3.5);
+
+    // Center target marker (red crosshair + dot)
+    p.setPen(QPen(QColor(220, 20, 20, 255), 1.5, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(QPointF(cx - 6.0, cy), QPointF(cx + 6.0, cy));
+    p.drawLine(QPointF(cx, cy - 6.0), QPointF(cx, cy + 6.0));
+    p.setBrush(QColor(220, 20, 20, 255));
+    p.drawEllipse(QPointF(cx, cy), 2.5, 2.5);
+}
+
+void MapCanvas::drawMeasurementOverlay() {
+    if (m_tool_mode != ToolMode::MeasureDistance && m_tool_mode != ToolMode::MeasureArea && m_measure_points.empty())
+        return;
+
+    const bool isArea = (m_tool_mode == ToolMode::MeasureArea);
+    const size_t ptCount = m_measure_points.size();
+
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setRenderHint(QPainter::TextAntialiasing, true);
+
+    QFont font = QApplication::font();
+    font.setPointSize(9);
+    font.setWeight(QFont::DemiBold);
+    p.setFont(font);
+    const QFontMetrics fm(font);
+
+    // Convert geo points in Project CRS to screen pixels
+    std::vector<QPointF> screenPts;
+    screenPts.reserve(ptCount + 1);
+    for (const auto& pt : m_measure_points) {
+        auto s = m_camera.geoToScreen(pt.x(), pt.y());
+        screenPts.emplace_back(s.x, s.y);
+    }
+
+    QPointF cursorScreen;
+    bool hasCursorScreen = false;
+    if (m_measure_has_cursor && !m_measure_finished) {
+        auto s = m_camera.geoToScreen(m_measure_cursor_geo.x(), m_measure_cursor_geo.y());
+        cursorScreen = QPointF(s.x, s.y);
+        hasCursorScreen = true;
+    }
+
+    // 1. Draw polygon fill if MeasureArea
+    if (isArea && (ptCount >= 3 || (ptCount >= 2 && hasCursorScreen))) {
+        QPolygonF poly;
+        for (const auto& sp : screenPts) poly << sp;
+        if (hasCursorScreen) poly << cursorScreen;
+
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0, 180, 255, 50));
+        p.drawPolygon(poly);
+    }
+
+    // 2. Draw connecting lines
+    const QColor lineColor = isArea ? QColor(0, 230, 150) : QColor(0, 210, 255);
+    const QColor haloColor(10, 15, 25, 210);
+
+    auto drawSegment = [&](const QPointF& p1, const QPointF& p2, bool dashed) {
+        p.setPen(QPen(haloColor, 4.5, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(p1, p2);
+        p.setPen(QPen(lineColor, 2.2, dashed ? Qt::DashLine : Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(p1, p2);
+    };
+
+    // Draw fixed segments
+    for (size_t i = 0; i + 1 < screenPts.size(); ++i) {
+        drawSegment(screenPts[i], screenPts[i + 1], false);
+    }
+
+    // If area finished, close back to start
+    if (isArea && m_measure_finished && screenPts.size() >= 3) {
+        drawSegment(screenPts.back(), screenPts.front(), false);
+    }
+
+    // If live cursor
+    if (hasCursorScreen && !screenPts.empty()) {
+        drawSegment(screenPts.back(), cursorScreen, true);
+        if (isArea && screenPts.size() >= 2) {
+            drawSegment(cursorScreen, screenPts.front(), true);
+        }
+    }
+
+    // 3. Draw segment distance pills at midpoints
+    auto drawPill = [&](const QPointF& mid, const QString& text, const QColor& textCol) {
+        int tw = fm.horizontalAdvance(text);
+        int th = fm.height();
+        int padX = 5, padY = 2;
+        QRectF rect(mid.x() - tw * 0.5 - padX, mid.y() - th * 0.5 - padY, tw + 2 * padX, th + 2 * padY);
+
+        p.setPen(QPen(QColor(0, 0, 0, 180), 1.0));
+        p.setBrush(QColor(15, 20, 28, 220));
+        p.drawRoundedRect(rect, 4, 4);
+
+        p.setPen(textCol);
+        p.drawText(rect, Qt::AlignCenter, text);
+    };
+
+    for (size_t i = 0; i + 1 < m_measure_points.size(); ++i) {
+        QPointF mid = (screenPts[i] + screenPts[i + 1]) * 0.5;
+        double segDist = fv::calculateSegmentDistance(m_measure_points[i], m_measure_points[i + 1], m_project_wkt);
+        drawPill(mid, fv::formatDistance(segDist), QColor(220, 245, 255));
+    }
+
+    if (isArea && m_measure_finished && m_measure_points.size() >= 3) {
+        QPointF mid = (screenPts.back() + screenPts.front()) * 0.5;
+        double segDist = fv::calculateSegmentDistance(m_measure_points.back(), m_measure_points.front(), m_project_wkt);
+        drawPill(mid, fv::formatDistance(segDist), QColor(220, 245, 255));
+    }
+
+    if (hasCursorScreen && !m_measure_points.empty()) {
+        QPointF mid = (screenPts.back() + cursorScreen) * 0.5;
+        double segDist = fv::calculateSegmentDistance(m_measure_points.back(), m_measure_cursor_geo, m_project_wkt);
+        drawPill(mid, fv::formatDistance(segDist), QColor(180, 220, 255));
+    }
+
+    // 4. Draw vertex node markers (numbered)
+    for (size_t i = 0; i < screenPts.size(); ++i) {
+        const QPointF& sp = screenPts[i];
+        p.setPen(QPen(haloColor, 2.0));
+        p.setBrush(QColor(255, 255, 255));
+        p.drawEllipse(sp, 5.0, 5.0);
+
+        p.setPen(Qt::NoPen);
+        p.setBrush(lineColor);
+        p.drawEllipse(sp, 3.2, 3.2);
+
+        // Vertex index tag
+        QString tag = QString::number(i + 1);
+        int tw = fm.horizontalAdvance(tag);
+        int th = fm.height();
+        QRectF tr(sp.x() - tw * 0.5 - 3, sp.y() - th - 7, tw + 6, th);
+        p.setPen(QPen(haloColor, 1.0));
+        p.setBrush(QColor(15, 20, 28, 210));
+        p.drawRoundedRect(tr, 3, 3);
+        p.setPen(QColor(240, 240, 240));
+        p.drawText(tr, Qt::AlignCenter, tag);
+    }
+
+    // 5. Draw center Area pill if Area mode and >= 3 vertices
+    if (isArea && ptCount >= 3) {
+        double sumX = 0, sumY = 0;
+        for (const auto& sp : screenPts) { sumX += sp.x(); sumY += sp.y(); }
+        QPointF center(sumX / ptCount, sumY / ptCount);
+        double area = fv::calculatePolygonArea(m_measure_points, m_project_wkt);
+        QString areaText = QString("Area: %1").arg(fv::formatArea(area));
+        drawPill(center, areaText, QColor(0, 255, 170));
+    }
+
+    // 6. Draw floating HUD Summary Banner at top-center of the canvas
+    std::vector<QPointF> allPts = m_measure_points;
+    if (hasCursorScreen) allPts.push_back(m_measure_cursor_geo);
+
+    double totalDist = fv::calculatePolylineDistance(allPts, m_project_wkt);
+    double totalArea = (isArea && allPts.size() >= 3) ? fv::calculatePolygonArea(allPts, m_project_wkt) : 0.0;
+
+    QString line1, line2;
+    if (isArea) {
+        line1 = QString("Area (Spherical Geodesic): %1  |  Perimeter: %2")
+                    .arg(fv::formatArea(totalArea), fv::formatDistance(totalDist));
+        line2 = m_measure_finished
+                    ? tr("Finished (%1 vertices) — Left-click to start new, Esc to clear").arg(allPts.size())
+                    : tr("Vertices: %1 — Left-click: add vertex, Right-click/Dbl-click: finish, Esc: clear").arg(allPts.size());
+    } else {
+        line1 = QString("Distance (Haversine): %1")
+                    .arg(fv::formatDistanceDetailed(totalDist));
+        line2 = m_measure_finished
+                    ? tr("Finished (%1 points) — Left-click to start new, Esc to clear").arg(allPts.size())
+                    : tr("Points: %1 — Left-click: add point, Right-click/Dbl-click: finish, Esc: clear").arg(allPts.size());
+    }
+
+    QFont boldFont = font;
+    boldFont.setPointSize(10);
+    boldFont.setBold(true);
+    QFont smallFont = font;
+    smallFont.setPointSize(8);
+    smallFont.setWeight(QFont::Normal);
+
+    QFontMetrics fmBold(boldFont);
+    QFontMetrics fmSmall(smallFont);
+    int w1 = fmBold.horizontalAdvance(line1);
+    int w2 = fmSmall.horizontalAdvance(line2);
+    int bannerW = std::max(w1, w2) + 24;
+    int bannerH = fmBold.height() + fmSmall.height() + 14;
+    int bx = (width() - bannerW) / 2;
+    int by = 12;
+
+    QRectF hudRect(bx, by, bannerW, bannerH);
+    p.setPen(QPen(isArea ? QColor(0, 230, 150, 140) : QColor(0, 210, 255, 140), 1.0));
+    p.setBrush(QColor(13, 17, 23, 235));
+    p.drawRoundedRect(hudRect, 6, 6);
+
+    p.setFont(boldFont);
+    p.setPen(isArea ? QColor(0, 240, 160) : QColor(0, 220, 255));
+    p.drawText(QRectF(bx + 12, by + 5, bannerW - 24, fmBold.height()), Qt::AlignLeft | Qt::AlignVCenter, line1);
+
+    p.setFont(smallFont);
+    p.setPen(QColor(180, 195, 205));
+    p.drawText(QRectF(bx + 12, by + 7 + fmBold.height(), bannerW - 24, fmSmall.height()), Qt::AlignLeft | Qt::AlignVCenter, line2);
 }
 
 void MapCanvas::mousePressEvent(QMouseEvent* event) {
@@ -987,7 +1252,44 @@ void MapCanvas::mousePressEvent(QMouseEvent* event) {
         return;
     }
 
-    if (m_inspect_mode) {
+    if (m_tool_mode == ToolMode::MeasureDistance || m_tool_mode == ToolMode::MeasureArea) {
+        auto geo = m_camera.screenToGeo(event->position().x(), event->position().y());
+        if (event->button() == Qt::LeftButton) {
+            if (m_measure_finished) {
+                m_measure_points.clear();
+                m_measure_finished = false;
+            }
+            m_measure_points.emplace_back(geo.x, geo.y);
+            m_measure_has_cursor = true;
+            m_measure_cursor_geo = QPointF(geo.x, geo.y);
+
+            double dist = fv::calculatePolylineDistance(m_measure_points, m_project_wkt);
+            double area = (m_tool_mode == ToolMode::MeasureArea && m_measure_points.size() >= 3)
+                              ? fv::calculatePolygonArea(m_measure_points, m_project_wkt) : 0.0;
+            QString summary = (m_tool_mode == ToolMode::MeasureArea)
+                                  ? QString("Area: %1 | Perimeter: %2").arg(fv::formatArea(area), fv::formatDistance(dist))
+                                  : QString("Distance: %1").arg(fv::formatDistanceDetailed(dist));
+            emit measurementUpdated(dist, area, summary);
+            update();
+            return;
+        } else if (event->button() == Qt::RightButton) {
+            if (!m_measure_points.empty()) {
+                m_measure_finished = true;
+                m_measure_has_cursor = false;
+                double dist = fv::calculatePolylineDistance(m_measure_points, m_project_wkt);
+                double area = (m_tool_mode == ToolMode::MeasureArea && m_measure_points.size() >= 3)
+                                  ? fv::calculatePolygonArea(m_measure_points, m_project_wkt) : 0.0;
+                QString summary = (m_tool_mode == ToolMode::MeasureArea)
+                                      ? QString("Area: %1 | Perimeter: %2").arg(fv::formatArea(area), fv::formatDistance(dist))
+                                      : QString("Distance: %1").arg(fv::formatDistanceDetailed(dist));
+                emit measurementUpdated(dist, area, summary);
+                update();
+            }
+            return;
+        }
+    }
+
+    if (inspectMode()) {
         auto geo = m_camera.screenToGeo(event->position().x(), event->position().y());
         if (event->button() == Qt::LeftButton) {
             updateHighlightForGeo(geo.x, geo.y);
@@ -1013,6 +1315,25 @@ void MapCanvas::mousePressEvent(QMouseEvent* event) {
     QOpenGLWidget::mousePressEvent(event);
 }
 
+void MapCanvas::mouseDoubleClickEvent(QMouseEvent* event) {
+    if (m_tool_mode == ToolMode::MeasureDistance || m_tool_mode == ToolMode::MeasureArea) {
+        if (!m_measure_points.empty()) {
+            m_measure_finished = true;
+            m_measure_has_cursor = false;
+            double dist = fv::calculatePolylineDistance(m_measure_points, m_project_wkt);
+            double area = (m_tool_mode == ToolMode::MeasureArea && m_measure_points.size() >= 3)
+                              ? fv::calculatePolygonArea(m_measure_points, m_project_wkt) : 0.0;
+            QString summary = (m_tool_mode == ToolMode::MeasureArea)
+                                  ? QString("Area: %1 | Perimeter: %2").arg(fv::formatArea(area), fv::formatDistance(dist))
+                                  : QString("Distance: %1").arg(fv::formatDistanceDetailed(dist));
+            emit measurementUpdated(dist, area, summary);
+            update();
+            return;
+        }
+    }
+    QOpenGLWidget::mouseDoubleClickEvent(event);
+}
+
 void MapCanvas::mouseMoveEvent(QMouseEvent* event) {
     QPointF pos = event->position();
 
@@ -1022,6 +1343,13 @@ void MapCanvas::mouseMoveEvent(QMouseEvent* event) {
         m_last_mouse_pos = pos;
         update();
         emit cameraChanged(m_camera);
+    }
+
+    if ((m_tool_mode == ToolMode::MeasureDistance || m_tool_mode == ToolMode::MeasureArea) && !m_measure_finished && !m_measure_points.empty()) {
+        auto geo = m_camera.screenToGeo(pos.x(), pos.y());
+        m_measure_cursor_geo = QPointF(geo.x, geo.y);
+        m_measure_has_cursor = true;
+        update();
     }
 
     // Emit cursor geo position for status bar
@@ -1059,7 +1387,7 @@ void MapCanvas::mouseReleaseEvent(QMouseEvent* event) {
     if (event->button() == Qt::MiddleButton) m_mid_panning = false;
 
     if (!m_panning && !m_mid_panning)
-        setCursor(m_inspect_mode ? Qt::CrossCursor : Qt::ArrowCursor);
+        setCursor(m_tool_mode != ToolMode::Navigate ? Qt::CrossCursor : Qt::ArrowCursor);
 
     QOpenGLWidget::mouseReleaseEvent(event);
 }
@@ -1077,6 +1405,13 @@ void MapCanvas::wheelEvent(QWheelEvent* event) {
 
 void MapCanvas::keyPressEvent(QKeyEvent* event) {
     switch (event->key()) {
+    case Qt::Key_Escape:
+        if (m_tool_mode == ToolMode::MeasureDistance || m_tool_mode == ToolMode::MeasureArea) {
+            clearMeasurement();
+            update();
+            return;
+        }
+        break;
     case Qt::Key_Space:
         fitToLayers();
         update();

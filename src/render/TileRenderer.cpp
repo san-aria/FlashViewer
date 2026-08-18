@@ -292,22 +292,26 @@ bool TileRenderer::ensureTile(QOpenGLFunctions_4_1_Core& gl,
                     int act_w = std::min(src_w, eff_w - xoff);
                     int act_h = std::min(src_h, eff_h - yoff);
 
-                    // Destination tile dimensions (bounded to kTileSize = 256 for smooth LOD)
-                    int dst_act_w = std::min(kTileSize, std::max(1, static_cast<int>(std::round(static_cast<double>(kTileSize) * act_w / src_w))));
-                    int dst_act_h = std::min(kTileSize, std::max(1, static_cast<int>(std::round(static_cast<double>(kTileSize) * act_h / src_h))));
+                    int max_zoom = static_cast<int>(std::ceil(std::log2(
+                        std::max(eff_w, eff_h) / static_cast<double>(kTileSize))));
+                    max_zoom = std::max(0, max_zoom);
+                    int downsample = (zoom >= max_zoom) ? 1 : (1 << (max_zoom - zoom));
+
+                    int dst_act_w = std::max(1, (act_w + downsample - 1) / downsample);
+                    int dst_act_h = std::max(1, (act_h + downsample - 1) / downsample);
 
                     // Read a neighbour apron around the tile, clamped to the dataset
-                    int src_hx = (dst_act_w >= act_w) ? kTileApron : static_cast<int>(std::ceil(kTileApron * static_cast<double>(act_w) / dst_act_w));
-                    int src_hy = (dst_act_h >= act_h) ? kTileApron : static_cast<int>(std::ceil(kTileApron * static_cast<double>(act_h) / dst_act_h));
+                    int src_hx = kTileApron * downsample;
+                    int src_hy = kTileApron * downsample;
                     int rx0 = std::max(0, xoff - src_hx), ry0 = std::max(0, yoff - src_hy);
                     int rx1 = std::min(eff_w, xoff + act_w + src_hx);
                     int ry1 = std::min(eff_h, yoff + act_h + src_hy);
                     int read_w = rx1 - rx0, read_h = ry1 - ry0;
 
-                    int dst_w = std::max(1, static_cast<int>(std::round(static_cast<double>(read_w) * dst_act_w / act_w)));
-                    int dst_h = std::max(1, static_cast<int>(std::round(static_cast<double>(read_h) * dst_act_h / act_h)));
-                    int inner_x = static_cast<int>(std::round(static_cast<double>(xoff - rx0) * dst_act_w / act_w));
-                    int inner_y = static_cast<int>(std::round(static_cast<double>(yoff - ry0) * dst_act_h / act_h));
+                    int dst_w = std::max(1, (read_w + downsample - 1) / downsample);
+                    int dst_h = std::max(1, (read_h + downsample - 1) / downsample);
+                    int inner_x = (xoff - rx0) / downsample;
+                    int inner_y = (yoff - ry0) / downsample;
 
                     TileBuffer buf = ds->readWarpedRegion(project_wkt, rx0, ry0, read_w, read_h,
                                                           dst_w, dst_h, bands, resampling);
@@ -373,22 +377,26 @@ bool TileRenderer::ensureTile(QOpenGLFunctions_4_1_Core& gl,
         int act_w = std::min(src_w, eff_w - xoff);
         int act_h = std::min(src_h, eff_h - yoff);
 
-        // Destination tile dimensions (bounded to kTileSize = 256 for smooth LOD)
-        int dst_act_w = std::min(kTileSize, std::max(1, static_cast<int>(std::round(static_cast<double>(kTileSize) * act_w / src_w))));
-        int dst_act_h = std::min(kTileSize, std::max(1, static_cast<int>(std::round(static_cast<double>(kTileSize) * act_h / src_h))));
+        int max_zoom = static_cast<int>(std::ceil(std::log2(
+            std::max(eff_w, eff_h) / static_cast<double>(kTileSize))));
+        max_zoom = std::max(0, max_zoom);
+        int downsample = (zoom >= max_zoom) ? 1 : (1 << (max_zoom - zoom));
+
+        int dst_act_w = std::max(1, (act_w + downsample - 1) / downsample);
+        int dst_act_h = std::max(1, (act_h + downsample - 1) / downsample);
 
         // Read a neighbour apron around the tile, clamped to the dataset
-        int src_hx = (dst_act_w >= act_w) ? kTileApron : static_cast<int>(std::ceil(kTileApron * static_cast<double>(act_w) / dst_act_w));
-        int src_hy = (dst_act_h >= act_h) ? kTileApron : static_cast<int>(std::ceil(kTileApron * static_cast<double>(act_h) / dst_act_h));
+        int src_hx = kTileApron * downsample;
+        int src_hy = kTileApron * downsample;
         int rx0 = std::max(0, xoff - src_hx), ry0 = std::max(0, yoff - src_hy);
         int rx1 = std::min(eff_w, xoff + act_w + src_hx);
         int ry1 = std::min(eff_h, yoff + act_h + src_hy);
         int read_w = rx1 - rx0, read_h = ry1 - ry0;
 
-        int dst_w = std::max(1, static_cast<int>(std::round(static_cast<double>(read_w) * dst_act_w / act_w)));
-        int dst_h = std::max(1, static_cast<int>(std::round(static_cast<double>(read_h) * dst_act_h / act_h)));
-        int inner_x = static_cast<int>(std::round(static_cast<double>(xoff - rx0) * dst_act_w / act_w));
-        int inner_y = static_cast<int>(std::round(static_cast<double>(yoff - ry0) * dst_act_h / act_h));
+        int dst_w = std::max(1, (read_w + downsample - 1) / downsample);
+        int dst_h = std::max(1, (read_h + downsample - 1) / downsample);
+        int inner_x = (xoff - rx0) / downsample;
+        int inner_y = (yoff - ry0) / downsample;
 
         TileBuffer buf = ds->readWarpedRegion(project_wkt, rx0, ry0, read_w, read_h,
                                               dst_w, dst_h, bands, resampling);
@@ -419,8 +427,6 @@ bool TileRenderer::ensureTile(QOpenGLFunctions_4_1_Core& gl,
 }
 
 // --------------------------------------------------------------------------
-// Draw
-
 void TileRenderer::drawTile(QOpenGLFunctions_4_1_Core& gl,
                               const TileKey& key,
                               const GpuTile& tile,
@@ -428,11 +434,14 @@ void TileRenderer::drawTile(QOpenGLFunctions_4_1_Core& gl,
                               RasterLayer* layer,
                               const RasterDataset::WarpedView& wv,
                               float opacity,
-                              bool use_nearest) {
+                              bool use_nearest,
+                              glm::dvec2 camera_center) {
     Extent ext = tileExtentFor(wv, key);
     glm::vec4 tile_ext{
-        static_cast<float>(ext.xmin), static_cast<float>(ext.ymin),
-        static_cast<float>(ext.xmax), static_cast<float>(ext.ymax)
+        static_cast<float>(ext.xmin - camera_center.x),
+        static_cast<float>(ext.ymin - camera_center.y),
+        static_cast<float>(ext.xmax - camera_center.x),
+        static_cast<float>(ext.ymax - camera_center.y)
     };
 
     // FR-RND-10 display resampling. At magnification past native (use_nearest) ALL
@@ -546,7 +555,8 @@ bool TileRenderer::render(QOpenGLFunctions_4_1_Core& gl,
 
     flushPendingUploads(gl);
 
-    glm::mat4 vp = camera.viewProjMatrix();
+    glm::mat4 vp = camera.relativeViewProjMatrix();
+    glm::dvec2 cam_c = camera.center();
     bool all_ready = true;
 
     for (auto it = layers.rbegin(); it != layers.rend(); ++it) {
@@ -604,14 +614,14 @@ bool TileRenderer::render(QOpenGLFunctions_4_1_Core& gl,
                     auto ft = m_cache.get(fallback);
                     if (ft && ft->state == TileState::Ready) {
                         m_cache.touch(fallback, m_frame_counter);
-                        drawTile(gl, fallback, *ft, vp, rl, wv, layer_ptr->opacity(), use_nearest);
+                        drawTile(gl, fallback, *ft, vp, rl, wv, layer_ptr->opacity(), use_nearest, cam_c);
                         break;
                     }
                 }
             } else {
                 auto tile = m_cache.get(key);
                 if (tile && tile->state == TileState::Ready) {
-                    drawTile(gl, key, *tile, vp, rl, wv, layer_ptr->opacity(), use_nearest);
+                    drawTile(gl, key, *tile, vp, rl, wv, layer_ptr->opacity(), use_nearest, cam_c);
                     // Keep repaint timer going while refresh is in progress
                     if (tile->refreshing.load(std::memory_order_acquire))
                         all_ready = false;

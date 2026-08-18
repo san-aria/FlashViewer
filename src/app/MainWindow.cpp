@@ -1034,10 +1034,29 @@ void MainWindow::setupMenuBar() {
 
     toolsMenu->addSeparator();
 
-    auto* actToolsSettings = toolsMenu->addAction(tr("&Preferences / Settings…"));
-    actToolsSettings->setMenuRole(QAction::NoRole);
-    actToolsSettings->setShortcut(QKeySequence("Ctrl+,"));
-    connect(actToolsSettings, &QAction::triggered, this, &MainWindow::showSettingsDialog);
+    m_act_inspect = toolsMenu->addAction(tr("&Inspect Pixel (I)"));
+    m_act_inspect->setCheckable(true);
+    m_act_inspect->setShortcut(QKeySequence(Qt::Key_I));
+    m_act_inspect->setToolTip(tr("Pixel Inspect mode: left-click=active layer, right-click=all layers (I)"));
+    connect(m_act_inspect, &QAction::triggered, this, [this](bool on) {
+        applyToolMode(on ? MapCanvas::ToolMode::Inspect : MapCanvas::ToolMode::Navigate);
+    });
+
+    m_act_measure_dist = toolsMenu->addAction(tr("Measure &Distance (M)"));
+    m_act_measure_dist->setCheckable(true);
+    m_act_measure_dist->setShortcut(QKeySequence(Qt::Key_M));
+    m_act_measure_dist->setToolTip(tr("Measure geodesic/Haversine distance along path (M)"));
+    connect(m_act_measure_dist, &QAction::triggered, this, [this](bool on) {
+        applyToolMode(on ? MapCanvas::ToolMode::MeasureDistance : MapCanvas::ToolMode::Navigate);
+    });
+
+    m_act_measure_area = toolsMenu->addAction(tr("Measure &Area (Ctrl+Shift+M)"));
+    m_act_measure_area->setCheckable(true);
+    m_act_measure_area->setShortcut(QKeySequence("Ctrl+Shift+M"));
+    m_act_measure_area->setToolTip(tr("Measure spherical geodesic polygon area and perimeter (Ctrl+Shift+M)"));
+    connect(m_act_measure_area, &QAction::triggered, this, [this](bool on) {
+        applyToolMode(on ? MapCanvas::ToolMode::MeasureArea : MapCanvas::ToolMode::Navigate);
+    });
 
     // ---- Settings ----
     auto* settingsMenu = menuBar()->addMenu(tr("&Settings"));
@@ -1178,22 +1197,9 @@ void MainWindow::setupToolBar() {
     toolbar->addAction(actNewPane);
 
     toolbar->addSeparator();
-
-    auto* actInspect = new QAction(tr("Inspect"), this);
-    actInspect->setToolTip(tr("Pixel Inspect mode: left-click=active layer, right-click=all layers (I)"));
-    actInspect->setCheckable(true);
-    actInspect->setShortcut(QKeySequence(Qt::Key_I));
-    // Inspect mode is an app-wide UI mode: apply it to every pane (Phase 6).
-    connect(actInspect, &QAction::toggled, this, [this](bool on) {
-        for (int i = 0; i < m_pane_layout->paneCount(); ++i) {
-            if (auto* c = m_pane_layout->paneCanvas(i)) {
-                c->setInspectMode(on);
-                if (!on) c->clearInspectHighlight();
-            }
-        }
-    });
-    connect(m_canvas, &MapCanvas::inspectModeChanged, actInspect, &QAction::setChecked);
-    toolbar->addAction(actInspect);
+    if (m_act_inspect)      toolbar->addAction(m_act_inspect);
+    if (m_act_measure_dist) toolbar->addAction(m_act_measure_dist);
+    if (m_act_measure_area) toolbar->addAction(m_act_measure_area);
 
     toolbar->addSeparator();
     auto* actShot = new QAction(tr("Screenshot"), this);
@@ -1201,12 +1207,6 @@ void MainWindow::setupToolBar() {
     actShot->setShortcut(QKeySequence("Ctrl+Shift+S"));
     connect(actShot, &QAction::triggered, this, &MainWindow::captureScreenshot);
     toolbar->addAction(actShot);
-
-    toolbar->addSeparator();
-    auto* actSettings = new QAction(tr("Settings"), this);
-    actSettings->setToolTip(tr("Open Preferences / Settings Dialog (Ctrl+,)"));
-    connect(actSettings, &QAction::triggered, this, &MainWindow::showSettingsDialog);
-    toolbar->addAction(actSettings);
 }
 
 void MainWindow::setupDocks() {
@@ -1881,6 +1881,18 @@ void MainWindow::wireCanvasSignals(MapCanvas* canvas) {
         inspectFromPane(canvas, x, y, /*allLayers=*/true);
     });
 
+    // Tool mode changes (Inspect, Measure Distance, Measure Area)
+    connect(canvas, &MapCanvas::toolModeChanged, this, [this](MapCanvas::ToolMode mode) {
+        if (m_act_inspect)      m_act_inspect->setChecked(mode == MapCanvas::ToolMode::Inspect);
+        if (m_act_measure_dist) m_act_measure_dist->setChecked(mode == MapCanvas::ToolMode::MeasureDistance);
+        if (m_act_measure_area) m_act_measure_area->setChecked(mode == MapCanvas::ToolMode::MeasureArea);
+    });
+    connect(canvas, &MapCanvas::measurementUpdated, this, [this](double /*dist*/, double /*area*/, const QString& summary) {
+        if (!summary.isEmpty()) {
+            statusBar()->showMessage(summary, 5000);
+        }
+    });
+
     // Pane gear-menu actions (Phase 6.1 / 6.2).
     connect(canvas, &MapCanvas::paneCloseRequested,  this, [this, canvas]{ closePane(canvas);  });
     connect(canvas, &MapCanvas::paneRenameRequested, this, [this, canvas]{ renamePane(canvas); });
@@ -2091,6 +2103,25 @@ void MainWindow::applyPaneLayoutMode(PaneLayoutMode m) {
     if (m_layout_acts[idx]) m_layout_acts[idx]->setChecked(true);
 }
 
+void MainWindow::applyToolMode(MapCanvas::ToolMode mode) {
+    if (m_act_inspect)      m_act_inspect->setChecked(mode == MapCanvas::ToolMode::Inspect);
+    if (m_act_measure_dist) m_act_measure_dist->setChecked(mode == MapCanvas::ToolMode::MeasureDistance);
+    if (m_act_measure_area) m_act_measure_area->setChecked(mode == MapCanvas::ToolMode::MeasureArea);
+
+    for (int i = 0; i < m_pane_layout->paneCount(); ++i) {
+        if (auto* c = m_pane_layout->paneCanvas(i)) {
+            c->setToolMode(mode);
+            if (mode != MapCanvas::ToolMode::Inspect) {
+                c->clearInspectHighlight();
+            }
+        }
+    }
+    if (mode != MapCanvas::ToolMode::Inspect) {
+        if (m_numeric_dump) m_numeric_dump->clear();
+        if (m_attr_insp)    m_attr_insp->clear();
+    }
+}
+
 void MainWindow::addPaneInteractive() {
     // Ask for the name AND the position before creating the pane. The name is pre-filled with
     // the default the pane would get anyway ("Pane N", N one past the highest number currently
@@ -2132,11 +2163,11 @@ MapCanvas* MainWindow::addPane(const QString& label) {
     // not auto-synced (Phase 6, point 13); empty label ⇒ PaneLayout's default
     auto* canvas = m_pane_layout->addPane(false, label);
     wireCanvasSignals(canvas);
-    // Inherit the current basemap + inspect mode + Performance HUD so the new pane
+    // Inherit the current basemap + tool mode + Performance HUD so the new pane
     // matches the others.
     if (m_canvas) {
         canvas->osmRenderer()->setEnabled(m_canvas->osmRenderer()->isEnabled());
-        canvas->setInspectMode(m_canvas->inspectMode());
+        canvas->setToolMode(m_canvas->toolMode());
         canvas->setPerfHudVisible(m_canvas->perfHudVisible());   // FR-APP-14
     }
     canvas->osmRenderer()->provider()->setUrlTemplate(Settings::instance().osmTileUrl());
@@ -2428,12 +2459,23 @@ void MainWindow::inspectFromPane(MapCanvas* clicked, double gx, double gy, bool 
     }
     auto active = m_layer_mgr->activeLayer();
     QVector<InspectPaneGroup> groups;
+    QVector<InspectPaneGroup> numeric_groups;
     for (uint64_t pid : panes) {
         InspectPaneGroup grp;
         grp.paneId = pid;
         grp.paneColor = m_pane_layout->paneColorForId(pid);
         for (int i = 0; i < m_pane_layout->paneCount(); ++i)
             if (m_pane_layout->paneId(i) == pid) { grp.paneLabel = m_pane_layout->paneLabel(i); break; }
+
+        InspectPaneGroup numGrp = grp;
+
+        // All visible raster layers in this pane for the numeric dump panel
+        for (int i = 0; i < m_layer_mgr->count(); ++i) {
+            auto l = m_layer_mgr->layerAt(i);
+            if (l && l->paneId() == pid && l->visible() && l->type() == LayerType::Raster) {
+                numGrp.layers.push_back(InspectLayerEntry{ l->name(), static_cast<RasterLayer*>(l.get()) });
+            }
+        }
 
         // A hidden layer's pixel value is never shown in the inspector (gates both the
         // left-click representative and the right-click all-layers paths).
@@ -2449,16 +2491,24 @@ void MainWindow::inspectFromPane(MapCanvas* clicked, double gx, double gy, bool 
                     addLayer(l);
             }
         } else {
-            // The pane's representative layer: the global active layer if it lives here, else
-            // the pane's topmost layer (mirrors updatePaneLegends).
+            // The pane's representative raster layer: the global active layer if it is a visible
+            // raster in this pane, else the first visible raster layer in this pane (skipping vector layers).
             std::shared_ptr<Layer> rep;
-            if (active && active->type() == LayerType::Raster && active->paneId() == pid)
+            if (active && active->type() == LayerType::Raster && active->paneId() == pid && active->visible()) {
                 rep = active;
-            else
-                rep = m_layer_mgr->layerAt(topLayerIndexInPane(pid));
+            } else {
+                for (int i = 0; i < m_layer_mgr->count(); ++i) {
+                    auto l = m_layer_mgr->layerAt(i);
+                    if (l && l->paneId() == pid && l->visible() && l->type() == LayerType::Raster) {
+                        rep = l;
+                        break;
+                    }
+                }
+            }
             addLayer(rep);
         }
         groups.push_back(std::move(grp));
+        numeric_groups.push_back(std::move(numGrp));
     }
 
     // (gx,gy) are in the clicked pane's Project CRS; pass it so the inspector samples each
@@ -2466,7 +2516,7 @@ void MainWindow::inspectFromPane(MapCanvas* clicked, double gx, double gy, bool 
     const std::string geoWkt = clicked->projectCrsWkt();
     m_attr_insp->inspectGroups(gx, gy, geoWkt, groups);
     if (m_numeric_dump)
-        m_numeric_dump->inspectGroups(gx, gy, geoWkt, groups);
+        m_numeric_dump->inspectGroups(gx, gy, geoWkt, numeric_groups);
 
     // The Spectral Plot is fed the SAME groups (Phase 26), so its curves and the inspector's
     // rows always describe one selection: left-click ⇒ the topmost/representative layer of
