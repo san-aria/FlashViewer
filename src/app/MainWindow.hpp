@@ -9,10 +9,17 @@
 #include "gis/InspectTypes.hpp"        // InspectPaneGroup — the shared inspect/profile scope
 #include "panels/NoDataWidget.hpp"
 #include "render/PaneLayoutMode.hpp"   // applyPaneLayoutMode / the View → Pane Layout radio
+#include <QApplication>
+#include <QEventLoop>
+#include <QProgressDialog>
+#include <QStatusBar>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
+#include <atomic>
+#include <functional>
+#include <future>
 
 class MapCanvas;
 class PaneLayout;
@@ -32,6 +39,9 @@ class BandSelectorWidget;
 class ColormapSelectorWidget;
 class RasterInfoPanel;
 class AttributeInspector;
+class NumericDumpPanel;
+class VectorLayerPanel;
+class PlotWindow;
 class RasterLayer;
 class RasterDataset;
 class SpectralPlotPanel;
@@ -44,6 +54,8 @@ public:
     ~MainWindow() override;
 
     void openFiles(const QStringList& paths);
+    void openVectorFiles(const QStringList& paths, uint64_t targetPaneId = 0);
+    void showSettingsDialog();
 
 public slots:
     void onThemeChanged(Theme t);
@@ -115,6 +127,8 @@ private:
     void       updateProjectCrsStatus();
     // Open the Project-CRS picker for a pane (gear-menu / clickable status label, Phase 11).
     void       openProjectCrsPicker(MapCanvas* canvas);
+    void       setOsmBasemapEnabled(bool on);
+    uint64_t   preparePaneForRasterLayer(const std::shared_ptr<RasterDataset>& ds, const QString& layerName);
     // selectTopLayer: on a pane change, also make the pane's topmost layer active (for a
     // canvas click). Pass false when the activation is driven by a layer selection, so the
     // already-selected layer stays active (Phase 6.3 fix).
@@ -211,11 +225,14 @@ private:
     RasterInfoPanel*       m_info_panel{nullptr};
     NoDataWidget*          m_nodata_widget{nullptr};
     AttributeInspector*    m_attr_insp{nullptr};
+    NumericDumpPanel*      m_numeric_dump{nullptr};
+    VectorLayerPanel*      m_vector_panel{nullptr};
 
     // View → Display Resampling (FR-RND-10): radio group + the 3 mode actions,
     // kept so onActiveLayerChanged can reflect the active layer's current mode.
     QActionGroup*          m_resample_group{nullptr};
     QAction*               m_resample_acts[3]{nullptr, nullptr, nullptr};
+    QAction*               m_act_osm{nullptr};
 
     // View → Pane Layout (FR-PNE-8): the 4 checkable mode actions, indexed Full / HalfH /
     // HalfV / Quarter, kept so applyPaneLayoutMode can re-tick them after a programmatic
@@ -258,4 +275,51 @@ private:
     // Closing one is handled in two places: the panel's own closeEvent() discards its plots
     // (so the rule holds however the window is closed), and the eventFilter() here saves the
     // frame and the divider, which only MainWindow knows the Settings key for.
+
+    // Modal background loading with cancel dialog (blocks background UI)
+    template <typename Fn>
+    auto runWithCancelDialog(const QString& title, const QString& labelText, Fn&& fn)
+        -> decltype(fn(std::declval<std::atomic<bool>&>()));
 };
+
+template <typename Fn>
+auto MainWindow::runWithCancelDialog(const QString& title, const QString& labelText, Fn&& fn)
+    -> decltype(fn(std::declval<std::atomic<bool>&>()))
+{
+    using ResultType = decltype(fn(std::declval<std::atomic<bool>&>()));
+    auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
+
+    QProgressDialog progress(labelText, tr("Cancel"), 0, 0, this);
+    progress.setWindowTitle(title);
+    progress.setWindowModality(Qt::ApplicationModal);
+    progress.setMinimumDuration(0);
+    progress.setValue(0);
+    progress.show();
+    progress.raise();
+    progress.activateWindow();
+    QApplication::processEvents();
+
+    auto future = std::async(std::launch::async, [fn = std::forward<Fn>(fn), cancelFlag]() mutable -> ResultType {
+        return fn(*cancelFlag);
+    });
+
+    while (future.wait_for(std::chrono::milliseconds(20)) != std::future_status::ready) {
+        QApplication::processEvents(QEventLoop::AllEvents, 20);
+        if (progress.wasCanceled()) {
+            cancelFlag->store(true, std::memory_order_relaxed);
+            break;
+        }
+    }
+
+    if (progress.wasCanceled()) {
+        progress.close();
+        if (statusBar()) statusBar()->showMessage(tr("Loading cancelled by user."), 4000);
+        if (future.valid()) {
+            future.wait_for(std::chrono::milliseconds(200));
+        }
+        return ResultType{};
+    }
+
+    progress.close();
+    return future.get();
+}

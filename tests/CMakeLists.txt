@@ -9,6 +9,7 @@ add_executable(flashviewer_tests
     test_geo_transform.cpp
     test_colormap.cpp
     test_tile_cache.cpp
+    test_vector.cpp
 
     # Phase 0 — test-infrastructure self-tests
     test_phase0_harness.cpp
@@ -70,6 +71,9 @@ add_executable(flashviewer_tests
     # 2-D geolocation-array warp (FR-IO-14/FR-IO-15)
     test_geoloc.cpp
 
+    # Resource and system metrics
+    test_system_metrics.cpp
+
     # Shared test harnesses / fixtures
     fixtures/FixtureFactory.cpp
     harness/GdalOracle.cpp
@@ -83,12 +87,16 @@ add_executable(flashviewer_tests
     "${CMAKE_SOURCE_DIR}/src/core/TileCache.cpp"
     "${CMAKE_SOURCE_DIR}/src/core/ThreadPool.cpp"
     "${CMAKE_SOURCE_DIR}/src/core/RasterLayer.cpp"
+    "${CMAKE_SOURCE_DIR}/src/core/VectorLayer.cpp"
     "${CMAKE_SOURCE_DIR}/src/core/LayerManager.cpp"
     "${CMAKE_SOURCE_DIR}/src/panels/HistogramPanel.cpp"
+    "${CMAKE_SOURCE_DIR}/src/panels/GpuMonitorPanel.cpp"
+    "${CMAKE_SOURCE_DIR}/src/panels/VectorLayerPanel.cpp"
     # LayerPanel + its icon button: TC-LYR-18/19 drive the real panel widget, because the
     # selection bookkeeping they pin lives in rebuildList, not in LayerGrouping's free
     # functions.
     "${CMAKE_SOURCE_DIR}/src/panels/LayerPanel.cpp"
+    "${CMAKE_SOURCE_DIR}/src/panels/NumericDumpPanel.cpp"
     # Both plot panels + the chart furniture they share: test_plots.cpp drives the real
     # widgets, because the crash it pins lives in the removal path, not in a free function.
     "${CMAKE_SOURCE_DIR}/src/plots/SpectralPlotPanel.cpp"
@@ -100,7 +108,9 @@ add_executable(flashviewer_tests
     "${CMAKE_SOURCE_DIR}/src/render/SyncGroup.cpp"
     "${CMAKE_SOURCE_DIR}/src/math/ExpressionEngine.cpp"
     "${CMAKE_SOURCE_DIR}/src/io/RasterDataset.cpp"
+    "${CMAKE_SOURCE_DIR}/src/io/VectorDataset.cpp"
     "${CMAKE_SOURCE_DIR}/src/io/DatasetFactory.cpp"
+    "${CMAKE_SOURCE_DIR}/src/io/PyramidBuilder.cpp"
     "${CMAKE_SOURCE_DIR}/src/io/CloudReader.cpp"
     "${CMAKE_SOURCE_DIR}/src/io/UrlGuard.cpp"
     "${CMAKE_SOURCE_DIR}/src/io/BinaryRasterParser.cpp"
@@ -109,12 +119,14 @@ add_executable(flashviewer_tests
     "${CMAKE_SOURCE_DIR}/src/render/GlslProgram.cpp"
     "${CMAKE_SOURCE_DIR}/src/render/Camera.cpp"
     "${CMAKE_SOURCE_DIR}/src/render/TileRenderer.cpp"
+    "${CMAKE_SOURCE_DIR}/src/render/VectorRenderer.cpp"
     "${CMAKE_SOURCE_DIR}/src/render/SurfaceFormat.cpp"
     "${CMAKE_SOURCE_DIR}/src/render/OsmTileRenderer.cpp"
     "${CMAKE_SOURCE_DIR}/src/io/OsmTileProvider.cpp"
     "${CMAKE_SOURCE_DIR}/src/util/Logger.cpp"
     "${CMAKE_SOURCE_DIR}/src/util/ErrorReporter.cpp"
     "${CMAKE_SOURCE_DIR}/src/util/PerfMetrics.cpp"
+    "${CMAKE_SOURCE_DIR}/src/util/SystemMetrics.cpp"
 )
 
 # Phase 12 — mirror the app's instrumentation gate so the perf lane can build the
