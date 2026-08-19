@@ -5,12 +5,14 @@ qt_add_executable(FlashViewer
     # App
     app/Application.hpp  app/Application.cpp
     app/MainWindow.hpp   app/MainWindow.cpp
+    app/CommandLineOptions.hpp
     app/Settings.hpp     app/Settings.cpp
     app/SettingsDialog.hpp app/SettingsDialog.cpp
     app/GpuInfoDialog.hpp app/GpuInfoDialog.cpp
     app/AboutLicensesDialog.hpp app/AboutLicensesDialog.cpp
     app/CoordAssignDialog.hpp app/CoordAssignDialog.cpp
     app/NewPaneDialog.hpp app/NewPaneDialog.cpp
+    app/LayerSettingsDialog.hpp app/LayerSettingsDialog.cpp
 
     # Core data model
     core/Extent.hpp
@@ -84,6 +86,8 @@ qt_add_executable(FlashViewer
     panels/GpuMonitorPanel.hpp      panels/GpuMonitorPanel.cpp
     panels/NumericDumpPanel.hpp     panels/NumericDumpPanel.cpp
     panels/VectorLayerPanel.hpp     panels/VectorLayerPanel.cpp
+    panels/SnrToolPanel.hpp         panels/SnrToolPanel.cpp
+    panels/MtfToolPanel.hpp         panels/MtfToolPanel.cpp
 
     # Plots
     plots/SpectralPlotPanel.hpp    plots/SpectralPlotPanel.cpp
